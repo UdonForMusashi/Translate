@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
                         state = state,
                         onVerifyShizuku = model::verifyShizuku,
                         onProfileSelected = model::selectProfile,
+                        onDownloadLatest = model::downloadLatestBundle,
                         onBundleSelected = model::importBundle,
                         onCancelImport = model::cancelImport,
                         onGameClosedChanged = model::setGameClosedConfirmed,
@@ -93,6 +94,7 @@ private fun InstallerScreen(
     state: ImportUiState,
     onVerifyShizuku: () -> Unit,
     onProfileSelected: (GameProfile) -> Unit,
+    onDownloadLatest: () -> Unit,
     onBundleSelected: (android.net.Uri) -> Unit,
     onCancelImport: () -> Unit,
     onGameClosedChanged: (Boolean) -> Unit,
@@ -120,7 +122,7 @@ private fun InstallerScreen(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "Primeiro verifique o Shizuku. Depois escolha a versão do jogo e o ZIP.",
+                text = "Primeiro verifique o Shizuku. Depois escolha a versão e baixe automaticamente o pacote mais recente.",
                 style = MaterialTheme.typography.bodyMedium,
             )
 
@@ -164,8 +166,21 @@ private fun InstallerScreen(
                 }
             }
 
-            SectionCard(title = "3. Pacote local") {
+            SectionCard(title = "3. Pacote") {
                 Button(
+                    onClick = onDownloadLatest,
+                    enabled = state.shizukuGate.isApproved &&
+                        state.selectedProfile != null &&
+                        !state.isWorking,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Baixar pacote mais recente")
+                }
+                Text(
+                    text = "Esta é a opção padrão. O aplicativo consulta a última Release pública do perfil selecionado, baixa o único ZIP e valida sua assinatura.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedButton(
                     onClick = {
                         selectZip.launch(arrayOf("application/zip", "application/octet-stream"))
                     },
@@ -174,10 +189,10 @@ private fun InstallerScreen(
                         !state.isWorking,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Selecionar pacote ZIP")
+                    Text("Selecionar ZIP manualmente")
                 }
                 Text(
-                    text = "O seletor do Android pode abrir Downloads. O arquivo original não é alterado.",
+                    text = "Alternativa manual: o seletor pode abrir Downloads e o arquivo original não é alterado.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -442,6 +457,11 @@ private fun EventRow(event: OperationEvent) {
 
 private fun eventMessage(code: MessageCode): String = when (code) {
     MessageCode.PROFILE_SELECTED -> "Perfil selecionado"
+    MessageCode.RELEASE_LOOKUP_STARTED -> "Consultando a última Release pública"
+    MessageCode.RELEASE_LOOKUP_SUCCEEDED -> "Release mais recente encontrada"
+    MessageCode.DOWNLOAD_STARTED -> "Download seguro iniciado"
+    MessageCode.DOWNLOAD_PROGRESS -> "Baixando pacote"
+    MessageCode.DOWNLOAD_SUCCEEDED -> "Download concluído"
     MessageCode.SOURCE_COPY_STARTED -> "Cópia para o staging privado iniciada"
     MessageCode.SOURCE_COPY_PROGRESS -> "Copiando pacote"
     MessageCode.SOURCE_COPY_SUCCEEDED -> "Cópia privada concluída"
@@ -499,6 +519,22 @@ private fun shizukuButtonLabel(status: ShizukuGateStatus): String = when (status
 }
 
 private fun failureMessage(code: BundleFailureCode): String = when (code) {
+    BundleFailureCode.NETWORK_UNAVAILABLE ->
+        "Não foi possível conectar ao GitHub. Verifique a internet e tente novamente."
+    BundleFailureCode.RELEASE_NOT_FOUND ->
+        "Ainda não há uma Release publicada para o perfil selecionado."
+    BundleFailureCode.RELEASE_RATE_LIMITED ->
+        "O GitHub limitou temporariamente as consultas deste aparelho. Tente mais tarde."
+    BundleFailureCode.RELEASE_REQUEST_FAILED ->
+        "O GitHub recusou a consulta da Release. Tente novamente mais tarde."
+    BundleFailureCode.RELEASE_RESPONSE_INVALID,
+    BundleFailureCode.RELEASE_ASSET_INVALID,
+    BundleFailureCode.DOWNLOAD_REDIRECT_INVALID,
+    -> "A Release não contém exatamente um ZIP seguro e válido."
+    BundleFailureCode.DOWNLOAD_SIZE_MISMATCH ->
+        "O tamanho baixado não corresponde ao tamanho publicado; o pacote foi apagado."
+    BundleFailureCode.DOWNLOAD_FAILED ->
+        "O download não pôde ser concluído com segurança."
     BundleFailureCode.SOURCE_PERMISSION_DENIED ->
         "O Android recusou a leitura do ZIP. Verifique as permissões do arquivo em Downloads e selecione-o novamente."
     BundleFailureCode.SOURCE_READ_FAILED ->

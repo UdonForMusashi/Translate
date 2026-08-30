@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 enum class OperationPhase {
     SELECT,
+    DOWNLOAD,
     IMPORT,
     AUTHENTICATE,
     INSPECT,
@@ -24,6 +25,11 @@ enum class OperationStatus {
 
 enum class MessageCode {
     PROFILE_SELECTED,
+    RELEASE_LOOKUP_STARTED,
+    RELEASE_LOOKUP_SUCCEEDED,
+    DOWNLOAD_STARTED,
+    DOWNLOAD_PROGRESS,
+    DOWNLOAD_SUCCEEDED,
     SOURCE_COPY_STARTED,
     SOURCE_COPY_PROGRESS,
     SOURCE_COPY_SUCCEEDED,
