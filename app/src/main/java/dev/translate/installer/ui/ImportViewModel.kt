@@ -10,8 +10,11 @@ import dev.translate.installer.audit.OperationEventSink
 import dev.translate.installer.audit.OperationPhase
 import dev.translate.installer.audit.OperationStatus
 import dev.translate.installer.audit.TransactionEventEmitter
-import dev.translate.installer.data.importer.ImportedLocalBundle
+import dev.translate.installer.data.importer.BundleStager
+import dev.translate.installer.data.importer.ImportedBundle
 import dev.translate.installer.data.importer.LocalBundleImporter
+import dev.translate.installer.data.remote.GitHubReleaseClient
+import dev.translate.installer.data.remote.RemoteBundleImporter
 import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.installer.InstallationReceipt
 import dev.translate.installer.installer.InstallationReceiptStore
@@ -46,7 +49,7 @@ data class ImportUiState(
     val currentPhase: OperationPhase? = null,
     val progress: Float? = null,
     val events: List<OperationEvent> = emptyList(),
-    val importedBundle: ImportedLocalBundle? = null,
+    val importedBundle: ImportedBundle? = null,
     val failureCode: BundleFailureCode? = null,
     val installerCapabilities: InstallerCapabilities? = null,
     val installerFailureCode: String? = null,
@@ -59,12 +62,14 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     private val _state = MutableStateFlow(ImportUiState())
     val state: StateFlow<ImportUiState> = _state.asStateFlow()
 
-    private val importer = LocalBundleImporter(
+    private val bundleStager = BundleStager(
         context = application,
         verifier = BundleVerifier(
             signatureVerifier = ManifestSignatureVerifier(ReleaseKeyProvider),
         ),
     )
+    private val localImporter = LocalBundleImporter(application, bundleStager)
+    private val remoteImporter = RemoteBundleImporter(GitHubReleaseClient(), bundleStager)
     private val fileInstaller = ShizukuFileInstaller(application)
     private val receiptStore = InstallationReceiptStore(application)
     private var importJob: Job? = null
@@ -122,6 +127,29 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun importBundle(uri: Uri) {
+        startBundleImport { transactionId, selectedProfile, emitter ->
+            localImporter.import(
+                source = uri,
+                transactionId = transactionId,
+                selectedProfile = selectedProfile,
+                events = emitter,
+            )
+        }
+    }
+
+    fun downloadLatestBundle() {
+        startBundleImport { transactionId, selectedProfile, emitter ->
+            remoteImporter.import(
+                transactionId = transactionId,
+                selectedProfile = selectedProfile,
+                events = emitter,
+            )
+        }
+    }
+
+    private fun startBundleImport(
+        importAction: suspend (String, GameProfile, TransactionEventEmitter) -> ImportedBundle,
+    ) {
         val selectedProfile = _state.value.selectedProfile ?: return
         if (!_state.value.shizukuGate.isApproved || importJob?.isActive == true) return
 
@@ -149,12 +177,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
 
         importJob = viewModelScope.launch {
             try {
-                val imported = importer.import(
-                    source = uri,
-                    transactionId = transactionId,
-                    selectedProfile = selectedProfile,
-                    events = emitter,
-                )
+                val imported = importAction(transactionId, selectedProfile, emitter)
                 emitter.emit(
                     phase = OperationPhase.PRECHECK,
                     status = OperationStatus.STARTED,
@@ -454,7 +477,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         if (approvalWasLost) {
             viewModelScope.launch {
                 try {
-                    importer.clearPrivateStaging()
+                    bundleStager.clearPrivateStaging()
                 } catch (_: BundleValidationException) {
                 }
             }
