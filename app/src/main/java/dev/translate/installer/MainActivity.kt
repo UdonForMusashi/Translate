@@ -2,9 +2,7 @@ package dev.translate.installer
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -70,7 +68,7 @@ class MainActivity : ComponentActivity() {
                         onVerifyShizuku = model::verifyShizuku,
                         onProfileSelected = model::selectProfile,
                         onDownloadLatest = model::downloadLatestBundle,
-                        onBundleSelected = model::importBundle,
+                        onClearCache = model::clearCache,
                         onCancelImport = model::cancelImport,
                         onGameClosedChanged = model::setGameClosedConfirmed,
                         onInstall = model::installImportedBundle,
@@ -95,17 +93,13 @@ private fun InstallerScreen(
     onVerifyShizuku: () -> Unit,
     onProfileSelected: (GameProfile) -> Unit,
     onDownloadLatest: () -> Unit,
-    onBundleSelected: (android.net.Uri) -> Unit,
+    onClearCache: () -> Unit,
     onCancelImport: () -> Unit,
     onGameClosedChanged: (Boolean) -> Unit,
     onInstall: () -> Unit,
     onUninstall: () -> Unit,
 ) {
     var showDetails by remember { mutableStateOf(true) }
-    val selectZip = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument(),
-        onResult = { uri -> if (uri != null) onBundleSelected(uri) },
-    )
 
     Scaffold { contentPadding ->
         Column(
@@ -122,7 +116,7 @@ private fun InstallerScreen(
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "Primeiro verifique o Shizuku. Depois escolha a versão e baixe automaticamente o pacote mais recente.",
+                text = "Primeiro verifique o Shizuku. Depois escolha FGO JP, FGO NA ou Blue Archive Global e baixe a Release mais recente.",
                 style = MaterialTheme.typography.bodyMedium,
             )
 
@@ -138,7 +132,7 @@ private fun InstallerScreen(
                 )
             }
 
-            SectionCard(title = "2. Versão do jogo") {
+            SectionCard(title = "2. Jogo e região") {
                 GameProfile.entries.forEach { profile ->
                     Row(
                         modifier = Modifier
@@ -166,7 +160,7 @@ private fun InstallerScreen(
                 }
             }
 
-            SectionCard(title = "3. Pacote") {
+            SectionCard(title = "3. Pacote oficial") {
                 Button(
                     onClick = onDownloadLatest,
                     enabled = state.shizukuGate.isApproved &&
@@ -177,22 +171,18 @@ private fun InstallerScreen(
                     Text("Baixar pacote mais recente")
                 }
                 Text(
-                    text = "Esta é a opção padrão. O aplicativo consulta a última Release pública do perfil selecionado, baixa o único ZIP e valida sua assinatura.",
+                    text = "O aplicativo aceita pacotes somente pela última Release pública do perfil selecionado. Antes de cada instalação, o GitHub é consultado novamente e um cache desatualizado é substituído.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 OutlinedButton(
-                    onClick = {
-                        selectZip.launch(arrayOf("application/zip", "application/octet-stream"))
-                    },
-                    enabled = state.shizukuGate.isApproved &&
-                        state.selectedProfile != null &&
-                        !state.isWorking,
+                    onClick = onClearCache,
+                    enabled = !state.isWorking,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Selecionar ZIP manualmente")
+                    Text("Limpar cache")
                 }
                 Text(
-                    text = "Alternativa manual: o seletor pode abrir Downloads e o arquivo original não é alterado.",
+                    text = "Remove o ZIP privado mais recente e seus arquivos temporários. A tradução já instalada e seu recibo não são alterados.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -278,7 +268,7 @@ private fun InstallerScreen(
                     }
                     if (state.importedBundle != null) {
                         Text(
-                            "A instalação altera diretamente somente os arquivos autenticados. Não cria backup, journal ou staging dentro do jogo. Arquivos .bin assinados podem ser adicionados quando ainda não existirem.",
+                            "A instalação altera diretamente somente os arquivos autenticados. Não cria backup, journal ou staging dentro do jogo. No FGO, arquivos .bin assinados podem ser adicionados; no Blue Archive, o ExcelDB.db original precisa existir.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Button(
@@ -289,7 +279,7 @@ private fun InstallerScreen(
                                 state.installationReceipt?.status != ReceiptStatus.PENDING,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("Instalar tradução")
+                            Text("Verificar e instalar tradução")
                         }
                     }
                     state.installationReceipt?.let { receipt ->
@@ -459,12 +449,13 @@ private fun eventMessage(code: MessageCode): String = when (code) {
     MessageCode.PROFILE_SELECTED -> "Perfil selecionado"
     MessageCode.RELEASE_LOOKUP_STARTED -> "Consultando a última Release pública"
     MessageCode.RELEASE_LOOKUP_SUCCEEDED -> "Release mais recente encontrada"
+    MessageCode.CACHED_RELEASE_CURRENT -> "O ZIP em cache ainda é a Release mais recente"
+    MessageCode.CACHED_RELEASE_STALE -> "O ZIP em cache está desatualizado e será substituído"
+    MessageCode.CACHE_CLEAR_STARTED -> "Limpando o cache privado"
+    MessageCode.CACHE_CLEAR_SUCCEEDED -> "Cache privado removido"
     MessageCode.DOWNLOAD_STARTED -> "Download seguro iniciado"
     MessageCode.DOWNLOAD_PROGRESS -> "Baixando pacote"
     MessageCode.DOWNLOAD_SUCCEEDED -> "Download concluído"
-    MessageCode.SOURCE_COPY_STARTED -> "Cópia para o staging privado iniciada"
-    MessageCode.SOURCE_COPY_PROGRESS -> "Copiando pacote"
-    MessageCode.SOURCE_COPY_SUCCEEDED -> "Cópia privada concluída"
     MessageCode.SIGNATURE_CHECK_STARTED -> "Verificando assinatura do manifesto"
     MessageCode.SIGNATURE_CHECK_SUCCEEDED -> "Assinatura válida"
     MessageCode.ARCHIVE_INSPECTION_STARTED -> "Inspecionando estrutura e manifesto"
@@ -527,6 +518,8 @@ private fun failureMessage(code: BundleFailureCode): String = when (code) {
         "O GitHub limitou temporariamente as consultas deste aparelho. Tente mais tarde."
     BundleFailureCode.RELEASE_REQUEST_FAILED ->
         "O GitHub recusou a consulta da Release. Tente novamente mais tarde."
+    BundleFailureCode.RELEASE_CHANGED_DURING_DOWNLOAD ->
+        "A Release mudou repetidamente durante o download. O cache antigo foi apagado; tente novamente."
     BundleFailureCode.RELEASE_RESPONSE_INVALID,
     BundleFailureCode.RELEASE_ASSET_INVALID,
     BundleFailureCode.DOWNLOAD_REDIRECT_INVALID,
@@ -535,14 +528,10 @@ private fun failureMessage(code: BundleFailureCode): String = when (code) {
         "O tamanho baixado não corresponde ao tamanho publicado; o pacote foi apagado."
     BundleFailureCode.DOWNLOAD_FAILED ->
         "O download não pôde ser concluído com segurança."
-    BundleFailureCode.SOURCE_PERMISSION_DENIED ->
-        "O Android recusou a leitura do ZIP. Verifique as permissões do arquivo em Downloads e selecione-o novamente."
-    BundleFailureCode.SOURCE_READ_FAILED ->
-        "O provedor de arquivos não conseguiu ler o ZIP. Copie ou baixe o arquivo novamente para Downloads."
     BundleFailureCode.SIGNING_KEY_UNKNOWN ->
         "A chave pública de release ainda não foi configurada. O app recusou o pacote."
     BundleFailureCode.PROFILE_MISMATCH ->
-        "O ZIP assinado pertence a outro perfil. Confira se escolheu JP ou NA corretamente."
+        "O ZIP assinado pertence a outro perfil. Confira o jogo e a região selecionados."
     BundleFailureCode.SIGNATURE_INVALID -> "A assinatura do manifesto é inválida."
     BundleFailureCode.ARCHIVE_TOO_LARGE -> "O ZIP excede o limite local de segurança."
     BundleFailureCode.FILE_HASH_MISMATCH -> "Um arquivo não corresponde ao SHA-256 assinado."
@@ -553,7 +542,7 @@ private fun failureMessage(code: BundleFailureCode): String = when (code) {
 
 private fun installerFailureMessage(code: String): String = when (code) {
     "GAME_DIRECTORY_NOT_FOUND" ->
-        "O diretório do jogo selecionado não foi encontrado. Abra o jogo ao menos uma vez e confirme JP/NA."
+        "O diretório do jogo selecionado não foi encontrado. Abra o jogo ao menos uma vez e confirme o perfil escolhido."
     "GAME_DIRECTORY_NOT_WRITABLE" ->
         "A identidade atual do Shizuku não consegue escrever no diretório do jogo. Este aparelho pode exigir root/Sui."
     "UNSAFE_GAME_DIRECTORY", "EXTRACTED_SOURCE_UNSAFE" ->
@@ -566,7 +555,7 @@ private fun installerFailureMessage(code: String): String = when (code) {
     "INSUFFICIENT_STORAGE" ->
         "Não há espaço livre suficiente no armazenamento do jogo para instalar com segurança."
     "TARGET_FILE_MISSING" ->
-        "Um arquivo obrigatório que não é .bin ainda não existe no jogo. Abra-o para concluir os downloads e tente novamente."
+        "Um arquivo obrigatório ainda não existe no jogo. Abra o jogo, conclua os downloads e tente novamente."
     "TARGET_CHANGED" ->
         "Um arquivo mudou desde a instalação e foi preservado."
     "RECEIPT_INVALID" ->

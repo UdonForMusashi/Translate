@@ -99,6 +99,7 @@ class ReleaseMetadataParserTest {
     fun `maps each profile to an independent repository`() {
         assertEquals("content-na", RemoteRepositoryCatalog.repository(GameProfile.NA))
         assertEquals("content-jp", RemoteRepositoryCatalog.repository(GameProfile.JP))
+        assertEquals("content-ba", RemoteRepositoryCatalog.repository(GameProfile.BA))
     }
 
     private fun releaseJson(assets: String): ByteArray =

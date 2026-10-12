@@ -1,6 +1,7 @@
 package dev.translate.installer.privileged
 
 import dev.translate.installer.domain.GameProfile
+import dev.translate.installer.domain.ProfileContentPolicy
 import dev.translate.installer.domain.decodeTechnical
 import java.io.File
 import java.io.FileInputStream
@@ -14,17 +15,28 @@ import java.security.MessageDigest
 internal data class PrivilegedProfile(
     val code: Int,
     val packageName: String,
+    val destinationRelativeDirectory: String,
+    val contentPolicy: ProfileContentPolicy,
 )
 
 internal object PrivilegedProfiles {
-    val JP = PrivilegedProfile(1, GameProfile.JP.packageName)
-    val NA = PrivilegedProfile(2, GameProfile.NA.packageName)
+    val JP = GameProfile.JP.toPrivilegedProfile(1)
+    val NA = GameProfile.NA.toPrivilegedProfile(2)
+    val BA = GameProfile.BA.toPrivilegedProfile(3)
 
     fun fromCode(code: Int): PrivilegedProfile = when (code) {
         JP.code -> JP
         NA.code -> NA
+        BA.code -> BA
         else -> throw InstallEngineException(InstallError.INVALID_PROFILE)
     }
+
+    private fun GameProfile.toPrivilegedProfile(code: Int) = PrivilegedProfile(
+        code = code,
+        packageName = packageName,
+        destinationRelativeDirectory = destinationRelativeDirectory,
+        contentPolicy = contentPolicy,
+    )
 }
 
 internal enum class InstallError(val serviceCode: Int) {
@@ -65,7 +77,7 @@ internal class TransactionalFileEngine(
     @Synchronized
     fun probe(profile: PrivilegedProfile, requiredBytes: Long) = guarded {
         val root = requireRoot(profile)
-        cleanupLegacyArtifacts(root)
+        cleanupLegacyArtifacts(profile, root)
         ensureSpace(root, requiredBytes, reclaimableBytes = 0)
     }
 
@@ -78,14 +90,14 @@ internal class TransactionalFileEngine(
         expectedSha256: String,
         progress: InstallProgress,
     ) = guarded {
-        val record = validateRecord(fileName, expectedSize, expectedSha256)
+        val record = validateRecord(profile, fileName, expectedSize, expectedSha256)
         val root = requireRoot(profile)
-        cleanupLegacyArtifacts(root)
+        cleanupLegacyArtifacts(profile, root)
         val target = safeChild(root, record.name)
         val targetExisted = target.exists()
         if (targetExisted) {
             requireExistingRegularFile(target)
-        } else if (!BIN_NAME.matches(record.name)) {
+        } else if (!profile.contentPolicy.mayCreateMissingFile(record.name)) {
             throw InstallEngineException(InstallError.TARGET_FILE_MISSING)
         }
         ensureSpace(
@@ -126,9 +138,9 @@ internal class TransactionalFileEngine(
 
     @Synchronized
     fun verifyInstalled(profile: PrivilegedProfile, records: List<PrivilegedInstalledFile>) = guarded {
-        validateRecords(records)
+        validateRecords(profile, records)
         val root = requireRoot(profile)
-        cleanupLegacyArtifacts(root)
+        cleanupLegacyArtifacts(profile, root)
         records.forEach { record ->
             val target = safeChild(root, record.name)
             requireExistingRegularFile(target)
@@ -142,9 +154,9 @@ internal class TransactionalFileEngine(
         records: List<PrivilegedInstalledFile>,
         progress: InstallProgress,
     ) = guarded {
-        validateRecords(records, allowAlternatives = true)
+        validateRecords(profile, records, allowAlternatives = true)
         val root = requireRoot(profile)
-        cleanupLegacyArtifacts(root)
+        cleanupLegacyArtifacts(profile, root)
 
         val recordsByName = records.groupBy { it.name }
 
@@ -226,6 +238,7 @@ internal class TransactionalFileEngine(
     }
 
     private fun validateRecords(
+        profile: PrivilegedProfile,
         records: List<PrivilegedInstalledFile>,
         allowAlternatives: Boolean = false,
     ) {
@@ -235,14 +248,17 @@ internal class TransactionalFileEngine(
             records.toSet().size != records.size ||
             recordsByName.values.any { it.size > maximumPerName }
         ) receiptInvalid()
-        records.forEach { validateRecord(it.name, it.size, it.sha256) }
-        if (SPECIAL_FILE !in recordsByName ||
-            records.none { BIN_NAME.matches(it.name) }
-        ) receiptInvalid()
+        records.forEach { validateRecord(profile, it.name, it.size, it.sha256) }
+        if (!profile.contentPolicy.isValidFileNameSet(recordsByName.keys)) receiptInvalid()
     }
 
-    private fun validateRecord(name: String, size: Long, hash: String): PrivilegedInstalledFile {
-        requireFileName(name)
+    private fun validateRecord(
+        profile: PrivilegedProfile,
+        name: String,
+        size: Long,
+        hash: String,
+    ): PrivilegedInstalledFile {
+        requireFileName(profile, name)
         if (size < 0 || size > MAX_FILE_BYTES || !SHA_256.matches(hash)) receiptInvalid()
         return PrivilegedInstalledFile(name, size, hash)
     }
@@ -316,13 +332,14 @@ internal class TransactionalFileEngine(
         return child
     }
 
-    private fun requireFileName(name: String) {
-        if (name != SPECIAL_FILE && !BIN_NAME.matches(name)) {
+    private fun requireFileName(profile: PrivilegedProfile, name: String) {
+        if (!profile.contentPolicy.isAllowedFileName(name)) {
             throw InstallEngineException(InstallError.INVALID_FILE_NAME)
         }
     }
 
-    private fun cleanupLegacyArtifacts(root: File) {
+    private fun cleanupLegacyArtifacts(profile: PrivilegedProfile, root: File) {
+        if (profile.contentPolicy != ProfileContentPolicy.FGO_TRANSLATION) return
         val children = root.listFiles() ?: io()
         children.forEach { child ->
             if (child.name in LEGACY_FIXED_NAMES || LEGACY_TRANSACTION.matches(child.name)) {
@@ -361,7 +378,6 @@ internal class TransactionalFileEngine(
     companion object {
         const val PHASE_INSTALL = 1
         const val PHASE_UNINSTALL = 2
-        const val SPECIAL_FILE = "cfb1d36393fd67385e046b084b7cf7ed"
         private const val BUFFER_SIZE = 64 * 1024
         private const val PROGRESS_STEP = 1024L * 1024L
         private const val MAX_FILES = 4_094
@@ -369,7 +385,6 @@ internal class TransactionalFileEngine(
         private const val MAX_FILE_BYTES = 1024L * 1024L * 1024L
         private const val MAX_TOTAL_BYTES = 4L * 1024L * 1024L * 1024L
         private const val MINIMUM_FREE_BYTES = 64L * 1024L * 1024L
-        private val BIN_NAME = Regex("[A-Za-z0-9_-]{1,128}\\.bin")
         private val SHA_256 = Regex("[0-9a-f]{64}")
         private val LEGACY_TRANSACTION = Regex(
             Regex.escape(decodeTechnical("LnRyYW5zbGF0ZWZnby10eG4t")) +

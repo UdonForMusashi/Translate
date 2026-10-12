@@ -20,11 +20,13 @@ class TransactionalFileEngineTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
     private lateinit var jpRoot: File
     private lateinit var naRoot: File
+    private lateinit var baRoot: File
     private lateinit var engine: TransactionalFileEngine
 
     @Before fun setUp() {
         jpRoot = temporaryFolder.newFolder("jp")
         naRoot = temporaryFolder.newFolder("na")
+        baRoot = temporaryFolder.newFolder("ba")
         engine = engine()
     }
 
@@ -210,8 +212,39 @@ class TransactionalFileEngineTest {
         assertEquals(InstallError.INSUFFICIENT_STORAGE, error.error)
     }
 
+    @Test fun `Blue Archive overwrites only an existing ExcelDB database`() {
+        val translated = "translated-database".toByteArray()
+        val target = File(baRoot, EXCEL_DB).apply { writeText("original-database") }
+
+        install(PrivilegedProfiles.BA, EXCEL_DB, translated)
+
+        assertArrayEquals(translated, target.readBytes())
+        assertEquals(setOf(EXCEL_DB), baRoot.list()!!.toSet())
+    }
+
+    @Test fun `Blue Archive rejects missing database and other file names`() {
+        val missing = assertThrows(InstallEngineException::class.java) {
+            install(PrivilegedProfiles.BA, EXCEL_DB, "translated".toByteArray())
+        }
+        assertEquals(InstallError.TARGET_FILE_MISSING, missing.error)
+
+        File(baRoot, EXCEL_DB).writeText("original")
+        val invalid = assertThrows(InstallEngineException::class.java) {
+            install(PrivilegedProfiles.BA, "outro.db", "translated".toByteArray())
+        }
+        assertEquals(InstallError.INVALID_FILE_NAME, invalid.error)
+        assertTrue(File(baRoot, EXCEL_DB).exists())
+    }
+
     private fun engine(usableSpace: Long? = null) = TransactionalFileEngine(
-        rootResolver = { profile -> if (profile == PrivilegedProfiles.JP) jpRoot else naRoot },
+        rootResolver = { profile ->
+            when (profile) {
+                PrivilegedProfiles.JP -> jpRoot
+                PrivilegedProfiles.NA -> naRoot
+                PrivilegedProfiles.BA -> baRoot
+                else -> error("perfil inesperado")
+            }
+        },
         usableSpaceProvider = { usableSpace ?: it.usableSpace },
     )
 
@@ -232,6 +265,7 @@ class TransactionalFileEngineTest {
     private companion object {
         const val BIN = "translation.bin"
         const val SPECIAL = "cfb1d36393fd67385e046b084b7cf7ed"
+        const val EXCEL_DB = "ExcelDB.db"
         val NO_PROGRESS = InstallProgress { _, _, _, _ -> }
     }
 }

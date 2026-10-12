@@ -38,6 +38,17 @@ class BundleVerifierTest {
         assertEquals("20260824-020202", verify(second, File(temporaryFolder.root, "b"), GameProfile.NA).manifest.version)
     }
 
+    @Test fun `authenticates and extracts the Blue Archive database profile`() {
+        val fixture = blueArchiveFixture()
+        val extraction = File(temporaryFolder.root, "blue-archive")
+
+        val result = verify(fixture, extraction, GameProfile.BA)
+
+        assertEquals("BA", result.manifest.profile)
+        assertEquals(1L, result.manifest.fileCount)
+        assertArrayEquals(fixture.bin, File(extraction, "files/ExcelDB.db").readBytes())
+    }
+
     @Test fun `rejects a bundle selected for the other profile`() {
         assertCode(BundleFailureCode.PROFILE_MISMATCH, fixture(GameProfile.JP), "profile", GameProfile.NA)
     }
@@ -162,6 +173,26 @@ class BundleVerifierTest {
             }
         }
         return Fixture(archive, bin, special)
+    }
+
+    private fun blueArchiveFixture(): Fixture {
+        val database = "translated-blue-archive-database".toByteArray()
+        val manifest = """
+            {"schemaVersion":2,"keyId":"${ManifestPolicy.RELEASE_KEY_ID}","profile":"BA","profileId":"${GameProfile.BA.profileId}","packageName":"${GameProfile.BA.packageName}","destinationDirectory":"${GameProfile.BA.destinationRelativeDirectory}","version":"fixture-ba-1","createdAt":"2026-10-11T00:00:00Z","fileCount":1,"uncompressedSize":${database.size},"files":[{"name":"ExcelDB.db","archiveEntry":"files/ExcelDB.db","size":${database.size},"sha256":"${sha256(database)}"}]}
+        """.trimIndent().toByteArray()
+        val signature = Signature.getInstance(ManifestPolicy.SUPPORTED_ALGORITHM).run {
+            initSign(keyPair.private); update(manifest); sign()
+        }
+        val envelope = """
+            {"schemaVersion":2,"keyId":"${ManifestPolicy.RELEASE_KEY_ID}","algorithm":"${ManifestPolicy.SUPPORTED_ALGORITHM}","signature":"${Base64.getEncoder().encodeToString(signature)}"}
+        """.trimIndent().toByteArray()
+        val archive = temporaryFolder.newFile("bundle-ba-${System.nanoTime()}.zip")
+        ZipOutputStream(archive.outputStream().buffered()).use { zip ->
+            zip.entry("manifest.json", manifest)
+            zip.entry("manifest.sig", envelope)
+            zip.entry("files/ExcelDB.db", database)
+        }
+        return Fixture(archive, database, byteArrayOf())
     }
 
     private fun ZipOutputStream.entry(name: String, bytes: ByteArray) {

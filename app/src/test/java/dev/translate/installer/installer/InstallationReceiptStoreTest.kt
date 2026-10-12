@@ -85,6 +85,20 @@ class InstallationReceiptStoreTest {
         assertFalse(File(root, "receipt-${GameProfile.JP.profileId}.partial").exists())
     }
 
+    @Test fun `accepts only ExcelDB for Blue Archive receipts`() {
+        val store = store()
+        val valid = receipt(GameProfile.BA, ReceiptStatus.INSTALLED)
+
+        store.save(valid)
+        assertEquals(valid, store.load(GameProfile.BA))
+
+        assertThrows(ReceiptStoreException::class.java) {
+            store.save(
+                valid.copy(files = listOf(InstalledFileRecord("outro.db", 3, HASH))),
+            )
+        }
+    }
+
     private fun store() = InstallationReceiptStore(
         temporaryFolder.newFolder("store-${System.nanoTime()}"),
         testOnly = true,
@@ -94,10 +108,14 @@ class InstallationReceiptStoreTest {
         profile = profile,
         bundleVersion = "2026.08.23",
         status = status,
-        files = listOf(
-            InstalledFileRecord("translation.bin", 3, HASH),
-            InstalledFileRecord(SPECIAL, 4, HASH),
-        ),
+        files = if (profile == GameProfile.BA) {
+            listOf(InstalledFileRecord("ExcelDB.db", 3, HASH))
+        } else {
+            listOf(
+                InstalledFileRecord("translation.bin", 3, HASH),
+                InstalledFileRecord(SPECIAL, 4, HASH),
+            )
+        },
     )
 
     private companion object {

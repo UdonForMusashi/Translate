@@ -44,8 +44,6 @@ class ManifestPolicy(
 
         val names = mutableSetOf<String>()
         val archiveEntries = mutableSetOf<String>()
-        var binCount = 0
-        var specialCount = 0
         var totalSize = 0L
 
         manifest.files.forEach { file ->
@@ -57,19 +55,9 @@ class ManifestPolicy(
                 fail(BundleFailureCode.UNCOMPRESSED_SIZE_MISMATCH)
             }
             if (!SHA_256.matches(file.sha256)) invalid()
-            val fileName = when {
-                file.archiveEntry == "files/$SPECIAL_FILE_NAME" -> {
-                    specialCount++
-                    SPECIAL_FILE_NAME
-                }
-                BIN_ARCHIVE_ENTRY.matches(file.archiveEntry) -> {
-                    binCount++
-                    file.archiveEntry.removePrefix("files/")
-                }
-                else -> fail(BundleFailureCode.UNSAFE_ENTRY)
-            }
-
-            if (file.name != fileName) {
+            if (!selectedProfile.contentPolicy.isAllowedFileName(file.name) ||
+                file.archiveEntry != "files/${file.name}"
+            ) {
                 fail(BundleFailureCode.UNSAFE_ENTRY)
             }
             if (!names.add(file.name) || !archiveEntries.add(file.archiveEntry)) {
@@ -77,7 +65,7 @@ class ManifestPolicy(
             }
         }
 
-        if (binCount < 1 || specialCount != 1) {
+        if (!selectedProfile.contentPolicy.isValidFileNameSet(names)) {
             fail(BundleFailureCode.FILE_COUNT_MISMATCH)
         }
         if (manifest.uncompressedSize != totalSize) {
@@ -98,10 +86,7 @@ class ManifestPolicy(
         const val SUPPORTED_ALGORITHM = "SHA256withECDSA"
         const val SCHEMA_VERSION = 2L
         val RELEASE_KEY_ID = decodeTechnical("dHJhbnNsYXRlZmdvLW1haW4=")
-        const val SPECIAL_FILE_NAME = "cfb1d36393fd67385e046b084b7cf7ed"
-
         private val SAFE_VERSION = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
         private val SHA_256 = Regex("[0-9a-f]{64}")
-        private val BIN_ARCHIVE_ENTRY = Regex("files/[A-Za-z0-9_-]{1,128}\\.bin")
     }
 }

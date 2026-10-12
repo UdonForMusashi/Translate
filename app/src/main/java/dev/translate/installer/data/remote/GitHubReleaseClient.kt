@@ -235,7 +235,7 @@ class GitHubReleaseClient(
     private companion object {
         const val OWNER = "UdonForMusashi"
         const val API_VERSION = "2022-11-28"
-        const val USER_AGENT = "TranslationInstaller/0.2.0"
+        const val USER_AGENT = "TranslationInstaller/0.3.0"
         const val JSON_ACCEPT = "application/vnd.github+json"
         const val BINARY_ACCEPT = "application/octet-stream"
         const val CONNECT_TIMEOUT_MS = 15_000
@@ -375,6 +375,7 @@ object RemoteRepositoryCatalog {
     fun repository(profile: GameProfile): String = when (profile) {
         GameProfile.NA -> "content-na"
         GameProfile.JP -> "content-jp"
+        GameProfile.BA -> "content-ba"
     }
 }
 
