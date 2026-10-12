@@ -96,7 +96,8 @@ class PrivilegedInstallerService : IPrivilegedInstallerService.Stub {
     private fun createEngine() = TransactionalFileEngine(
         rootResolver = { profile ->
             File(
-                "/storage/emulated/$androidUserId/Android/data/${profile.packageName}/files/data/d713",
+                "/storage/emulated/$androidUserId/Android/data/${profile.packageName}/" +
+                    profile.destinationRelativeDirectory.removeSuffix("/"),
             )
         },
     )

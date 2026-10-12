@@ -1,7 +1,6 @@
 package dev.translate.installer.ui
 
 import android.app.Application
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.translate.installer.audit.MessageCode
@@ -11,9 +10,8 @@ import dev.translate.installer.audit.OperationPhase
 import dev.translate.installer.audit.OperationStatus
 import dev.translate.installer.audit.TransactionEventEmitter
 import dev.translate.installer.data.importer.BundleStager
-import dev.translate.installer.data.importer.ImportedBundle
-import dev.translate.installer.data.importer.LocalBundleImporter
 import dev.translate.installer.data.remote.GitHubReleaseClient
+import dev.translate.installer.data.remote.RemoteImportedBundle
 import dev.translate.installer.data.remote.RemoteBundleImporter
 import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.installer.InstallationReceipt
@@ -49,7 +47,7 @@ data class ImportUiState(
     val currentPhase: OperationPhase? = null,
     val progress: Float? = null,
     val events: List<OperationEvent> = emptyList(),
-    val importedBundle: ImportedBundle? = null,
+    val importedBundle: RemoteImportedBundle? = null,
     val failureCode: BundleFailureCode? = null,
     val installerCapabilities: InstallerCapabilities? = null,
     val installerFailureCode: String? = null,
@@ -68,7 +66,6 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             signatureVerifier = ManifestSignatureVerifier(ReleaseKeyProvider),
         ),
     )
-    private val localImporter = LocalBundleImporter(application, bundleStager)
     private val remoteImporter = RemoteBundleImporter(GitHubReleaseClient(), bundleStager)
     private val fileInstaller = ShizukuFileInstaller(application)
     private val receiptStore = InstallationReceiptStore(application)
@@ -93,6 +90,66 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
 
     fun cancelImport() {
         importJob?.cancel()
+    }
+
+    fun clearCache() {
+        if (_state.value.isWorking || importJob?.isActive == true) return
+        val emitter = TransactionEventEmitter(
+            UUID.randomUUID().toString(),
+            sink = OperationEventSink(::onEvent),
+        )
+        _state.update {
+            it.copy(
+                isWorking = true,
+                currentPhase = OperationPhase.CLEANUP,
+                progress = null,
+                events = emptyList(),
+                failureCode = null,
+            )
+        }
+        importJob = viewModelScope.launch {
+            try {
+                emitter.emit(
+                    phase = OperationPhase.CLEANUP,
+                    status = OperationStatus.STARTED,
+                    messageCode = MessageCode.CACHE_CLEAR_STARTED,
+                )
+                bundleStager.clearPrivateStaging()
+                emitter.emit(
+                    phase = OperationPhase.CLEANUP,
+                    status = OperationStatus.SUCCEEDED,
+                    messageCode = MessageCode.CACHE_CLEAR_SUCCEEDED,
+                )
+                _state.update {
+                    it.copy(
+                        isWorking = false,
+                        currentPhase = OperationPhase.CLEANUP,
+                        progress = 1f,
+                        importedBundle = null,
+                        failureCode = null,
+                        installerCapabilities = null,
+                        installerFailureCode = it.installerFailureCode?.takeIf { code ->
+                            code.startsWith("RECEIPT_")
+                        },
+                        gameClosedConfirmed = false,
+                    )
+                }
+            } catch (exception: BundleValidationException) {
+                emitter.emit(
+                    phase = OperationPhase.CLEANUP,
+                    status = OperationStatus.FAILED,
+                    messageCode = MessageCode.OPERATION_FAILED,
+                    failureCode = exception.code.name,
+                )
+                _state.update {
+                    it.copy(
+                        isWorking = false,
+                        progress = null,
+                        failureCode = exception.code,
+                    )
+                }
+            }
+        }
     }
 
     fun selectProfile(profile: GameProfile) {
@@ -126,30 +183,11 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         _state.update { it.copy(gameClosedConfirmed = confirmed) }
     }
 
-    fun importBundle(uri: Uri) {
-        startBundleImport { transactionId, selectedProfile, emitter ->
-            localImporter.import(
-                source = uri,
-                transactionId = transactionId,
-                selectedProfile = selectedProfile,
-                events = emitter,
-            )
-        }
-    }
-
     fun downloadLatestBundle() {
-        startBundleImport { transactionId, selectedProfile, emitter ->
-            remoteImporter.import(
-                transactionId = transactionId,
-                selectedProfile = selectedProfile,
-                events = emitter,
-            )
-        }
+        startBundleDownload()
     }
 
-    private fun startBundleImport(
-        importAction: suspend (String, GameProfile, TransactionEventEmitter) -> ImportedBundle,
-    ) {
+    private fun startBundleDownload() {
         val selectedProfile = _state.value.selectedProfile ?: return
         if (!_state.value.shizukuGate.isApproved || importJob?.isActive == true) return
 
@@ -177,27 +215,15 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
 
         importJob = viewModelScope.launch {
             try {
-                val imported = importAction(transactionId, selectedProfile, emitter)
-                emitter.emit(
-                    phase = OperationPhase.PRECHECK,
-                    status = OperationStatus.STARTED,
-                    messageCode = MessageCode.PRIVILEGED_PROBE_STARTED,
+                val imported = remoteImporter.import(
+                    transactionId = transactionId,
+                    selectedProfile = selectedProfile,
+                    events = emitter,
                 )
-                val capabilities = try {
-                    fileInstaller.probe(
-                        selectedProfile,
-                        imported.verifiedBundle.manifest.uncompressedSize,
-                    )
-                } catch (exception: InstallerException) {
-                    InstallerCapabilities(false, exception.reasonCode)
-                }
-                emitter.emit(
-                    phase = OperationPhase.PRECHECK,
-                    status = if (capabilities.available) OperationStatus.SUCCEEDED
-                    else OperationStatus.FAILED,
-                    messageCode = if (capabilities.available) MessageCode.PRIVILEGED_PROBE_SUCCEEDED
-                    else MessageCode.OPERATION_FAILED,
-                    failureCode = capabilities.reasonCode.takeUnless { capabilities.available },
+                val capabilities = probeCapabilities(
+                    selectedProfile,
+                    imported,
+                    emitter,
                 )
                 _state.update {
                     it.copy(
@@ -212,7 +238,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (exception: CancellationException) {
                 emitter.emit(
-                    phase = _state.value.currentPhase ?: OperationPhase.IMPORT,
+                    phase = _state.value.currentPhase ?: OperationPhase.DOWNLOAD,
                     status = OperationStatus.FAILED,
                     messageCode = MessageCode.OPERATION_CANCELLED,
                 )
@@ -222,7 +248,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 throw exception
             } catch (exception: BundleValidationException) {
                 emitter.emit(
-                    phase = _state.value.currentPhase ?: OperationPhase.IMPORT,
+                    phase = _state.value.currentPhase ?: OperationPhase.DOWNLOAD,
                     status = OperationStatus.FAILED,
                     messageCode = MessageCode.OPERATION_FAILED,
                     failureCode = exception.code.name,
@@ -242,18 +268,13 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     fun installImportedBundle() {
         val snapshot = _state.value
         val profile = snapshot.selectedProfile ?: return
-        val imported = snapshot.importedBundle ?: return
+        val cachedBundle = snapshot.importedBundle ?: return
         if (!snapshot.shizukuGate.isApproved || snapshot.isWorking ||
             snapshot.installerCapabilities?.available != true || !snapshot.gameClosedConfirmed ||
             snapshot.installationReceipt?.status == ReceiptStatus.PENDING
         ) return
 
         val previousReceipt = snapshot.installationReceipt
-        val receipt = InstallationReceipt.pendingUpdate(
-            profile,
-            imported.verifiedBundle.manifest,
-            previousReceipt,
-        )
         val emitter = TransactionEventEmitter(
             UUID.randomUUID().toString(),
             sink = OperationEventSink(::onEvent),
@@ -261,24 +282,48 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         _state.update {
             it.copy(
                 isWorking = true,
-                currentPhase = OperationPhase.COMMIT,
+                currentPhase = OperationPhase.DOWNLOAD,
                 progress = null,
+                failureCode = null,
                 installerFailureCode = null,
-                isInstalled = false,
             )
         }
         importJob = viewModelScope.launch {
+            var readyBundle = cachedBundle
+            var pendingReceipt: InstallationReceipt? = null
             try {
+                readyBundle = ensureLatestBundle(profile, readyBundle, emitter)
+
+                val capabilities = probeCapabilities(profile, readyBundle, emitter)
+                _state.update {
+                    it.copy(
+                        importedBundle = readyBundle,
+                        installerCapabilities = capabilities,
+                        installerFailureCode = capabilities.reasonCode
+                            .takeUnless { capabilities.available },
+                    )
+                }
+                if (!capabilities.available) {
+                    _state.update { it.copy(isWorking = false, progress = null) }
+                    return@launch
+                }
+
+                val receipt = InstallationReceipt.pendingUpdate(
+                    profile,
+                    readyBundle.verifiedBundle.manifest,
+                    previousReceipt,
+                )
+                pendingReceipt = receipt
                 receiptStore.save(receipt)
                 _state.update { it.copy(installationReceipt = receipt) }
                 val outcome = fileInstaller.install(
                     profile = profile,
-                    bundle = imported.verifiedBundle,
+                    bundle = readyBundle.verifiedBundle,
                     progress = { reportInstallerProgress(emitter, it) },
                 )
                 val installedReceipt = InstallationReceipt.installedUpdate(
                     profile,
-                    imported.verifiedBundle.manifest,
+                    readyBundle.verifiedBundle.manifest,
                     previousReceipt,
                 )
                 receiptStore.save(installedReceipt)
@@ -292,14 +337,16 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                         isWorking = false,
                         currentPhase = OperationPhase.VERIFY,
                         progress = 1f,
+                        failureCode = null,
                         installerFailureCode = null,
                         isInstalled = outcome.installed,
+                        importedBundle = readyBundle,
                         installationReceipt = installedReceipt,
                     )
                 }
             } catch (exception: CancellationException) {
                 emitter.emit(
-                    phase = OperationPhase.COMMIT,
+                    phase = _state.value.currentPhase ?: OperationPhase.DOWNLOAD,
                     status = OperationStatus.FAILED,
                     messageCode = MessageCode.OPERATION_CANCELLED,
                 )
@@ -307,16 +354,125 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                     it.copy(
                         isWorking = false,
                         progress = null,
-                        installationReceipt = loadReceiptOr(receipt),
+                        installationReceipt = pendingReceipt?.let(::loadReceiptOr)
+                            ?: previousReceipt,
                     )
                 }
                 throw exception
+            } catch (exception: BundleValidationException) {
+                emitter.emit(
+                    phase = _state.value.currentPhase ?: OperationPhase.DOWNLOAD,
+                    status = OperationStatus.FAILED,
+                    messageCode = MessageCode.OPERATION_FAILED,
+                    failureCode = exception.code.name,
+                )
+                _state.update {
+                    it.copy(
+                        isWorking = false,
+                        progress = null,
+                        failureCode = exception.code,
+                    )
+                }
             } catch (exception: InstallerException) {
-                installationFailed(emitter, exception.reasonCode, receipt)
+                installationFailed(
+                    emitter,
+                    exception.reasonCode,
+                    pendingReceipt ?: InstallationReceipt.pendingUpdate(
+                        profile,
+                        readyBundle.verifiedBundle.manifest,
+                        previousReceipt,
+                    ),
+                )
             } catch (_: ReceiptStoreException) {
-                installationFailed(emitter, "RECEIPT_WRITE_FAILED", receipt)
+                installationFailed(
+                    emitter,
+                    "RECEIPT_WRITE_FAILED",
+                    pendingReceipt ?: InstallationReceipt.pendingUpdate(
+                        profile,
+                        readyBundle.verifiedBundle.manifest,
+                        previousReceipt,
+                    ),
+                )
             }
         }
+    }
+
+    private suspend fun ensureLatestBundle(
+        profile: GameProfile,
+        cachedBundle: RemoteImportedBundle,
+        emitter: TransactionEventEmitter,
+    ): RemoteImportedBundle {
+        var readyBundle = cachedBundle
+        repeat(MAX_RELEASE_REFRESH_CHECKS) { index ->
+            val latest = remoteImporter.latest(profile, emitter)
+            if (readyBundle.isCurrent(latest)) {
+                emitter.emit(
+                    phase = OperationPhase.DOWNLOAD,
+                    status = OperationStatus.SUCCEEDED,
+                    messageCode = MessageCode.CACHED_RELEASE_CURRENT,
+                    fileRelativePath = latest.name,
+                    bytesTotal = latest.size,
+                )
+                return readyBundle
+            }
+
+            emitter.emit(
+                phase = OperationPhase.DOWNLOAD,
+                status = OperationStatus.SKIPPED,
+                messageCode = MessageCode.CACHED_RELEASE_STALE,
+                fileRelativePath = readyBundle.releaseAsset.name,
+            )
+            bundleStager.clearPrivateStaging()
+            _state.update {
+                it.copy(
+                    importedBundle = null,
+                    installerCapabilities = null,
+                    progress = null,
+                )
+            }
+            if (index == MAX_RELEASE_REFRESH_CHECKS - 1) {
+                throw BundleValidationException(
+                    BundleFailureCode.RELEASE_CHANGED_DURING_DOWNLOAD,
+                )
+            }
+            readyBundle = remoteImporter.download(
+                transactionId = UUID.randomUUID().toString(),
+                selectedProfile = profile,
+                asset = latest,
+                events = emitter,
+            )
+            _state.update { it.copy(importedBundle = readyBundle) }
+        }
+        throw BundleValidationException(BundleFailureCode.RELEASE_CHANGED_DURING_DOWNLOAD)
+    }
+
+    private suspend fun probeCapabilities(
+        profile: GameProfile,
+        bundle: RemoteImportedBundle,
+        emitter: TransactionEventEmitter,
+    ): InstallerCapabilities {
+        emitter.emit(
+            phase = OperationPhase.PRECHECK,
+            status = OperationStatus.STARTED,
+            messageCode = MessageCode.PRIVILEGED_PROBE_STARTED,
+        )
+        val capabilities = try {
+            fileInstaller.probe(
+                profile,
+                bundle.verifiedBundle.manifest.uncompressedSize,
+            )
+        } catch (exception: InstallerException) {
+            InstallerCapabilities(false, exception.reasonCode)
+        }
+        emitter.emit(
+            phase = OperationPhase.PRECHECK,
+            status = if (capabilities.available) OperationStatus.SUCCEEDED
+            else OperationStatus.FAILED,
+            messageCode = if (capabilities.available) MessageCode.PRIVILEGED_PROBE_SUCCEEDED
+            else MessageCode.OPERATION_FAILED,
+            failureCode = capabilities.reasonCode.takeUnless { capabilities.available },
+        )
+        return capabilities
     }
 
     fun uninstallTranslation() {
@@ -491,5 +647,6 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
 
     private companion object {
         const val MAX_VISIBLE_EVENTS = 500
+        const val MAX_RELEASE_REFRESH_CHECKS = 3
     }
 }

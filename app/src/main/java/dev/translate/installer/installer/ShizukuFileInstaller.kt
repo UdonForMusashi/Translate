@@ -44,7 +44,7 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
         validateBundleProfile(profile, bundle)
         val files = bundle.manifest.files
         val names = files.map { it.name }
-        val callback = progressCallback(names.toSet(), progress)
+        val callback = progressCallback(profile, names.toSet(), progress)
         requireSuccess(service.probe(
             profile.toPrivilegedCode(),
             bundle.manifest.uncompressedSize,
@@ -82,13 +82,13 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
         files: List<InstalledFileRecord>,
         progress: (InstallerProgress) -> Unit,
     ) = withService { service ->
-        validateReceiptFiles(files)
+        validateReceiptFiles(profile, files)
         requireSuccess(service.uninstall(
             profile.toPrivilegedCode(),
             files.map { it.name }.toTypedArray(),
             files.map { it.size }.toLongArray(),
             files.map { it.sha256 }.toTypedArray(),
-            progressCallback(files.map { it.name }.toSet(), progress),
+            progressCallback(profile, files.map { it.name }.toSet(), progress),
         ))
     }
 
@@ -154,12 +154,13 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
     }
 
     private fun progressCallback(
+        profile: GameProfile,
         allowedNames: Set<String>,
         progress: (InstallerProgress) -> Unit,
     ) = object : IInstallProgressCallback.Stub() {
         override fun onProgress(phase: Int, fileName: String?, processed: Long, total: Long) {
             val safeName = fileName ?: return
-            if (safeName !in allowedNames || !isSafeFileName(safeName) ||
+            if (safeName !in allowedNames || !isSafeFileName(profile, safeName) ||
                 processed < 0 || total < 0 || processed > total) return
             val mapped = when (phase) {
                 TransactionalFileEngine.PHASE_INSTALL -> InstallerPhase.INSTALL
@@ -178,16 +179,15 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
         ) throw InstallerException("PROFILE_MISMATCH")
     }
 
-    private fun validateReceiptFiles(files: List<InstalledFileRecord>) {
+    private fun validateReceiptFiles(profile: GameProfile, files: List<InstalledFileRecord>) {
         val recordsByName = files.groupBy { it.name }
         if (files.isEmpty() || files.size > MAX_FILES ||
             files.toSet().size != files.size ||
             recordsByName.values.any { it.size > MAX_HASHES_PER_NAME } ||
-            TransactionalFileEngine.SPECIAL_FILE !in recordsByName ||
-            files.none { BIN_NAME.matches(it.name) }
+            !profile.contentPolicy.isValidFileNameSet(recordsByName.keys)
         ) throw InstallerException("RECEIPT_INVALID")
         files.forEach { file ->
-            if (!isSafeFileName(file.name) || file.size < 0 ||
+            if (!isSafeFileName(profile, file.name) || file.size < 0 ||
                 file.size > MAX_FILE_BYTES || !SHA_256.matches(file.sha256)
             ) throw InstallerException("RECEIPT_INVALID")
         }
@@ -196,6 +196,7 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
     private fun GameProfile.toPrivilegedCode() = when (this) {
         GameProfile.JP -> 1
         GameProfile.NA -> 2
+        GameProfile.BA -> 3
     }
 
     private fun mapException(exception: Throwable): InstallerException {
@@ -213,8 +214,8 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
         if (code != 0) throw InstallerException(reasonFor(code))
     }
 
-    private fun isSafeFileName(name: String) =
-        name == TransactionalFileEngine.SPECIAL_FILE || BIN_NAME.matches(name)
+    private fun isSafeFileName(profile: GameProfile, name: String) =
+        profile.contentPolicy.isAllowedFileName(name)
 
     private data class Binding(
         val args: Shizuku.UserServiceArgs,
@@ -223,13 +224,12 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
     )
 
     private companion object {
-        const val USER_SERVICE_TAG = "translation-installer-v2"
-        const val USER_SERVICE_VERSION = 2
+        const val USER_SERVICE_TAG = "translation-installer-v3"
+        const val USER_SERVICE_VERSION = 3
         const val BIND_TIMEOUT_MS = 15_000L
         const val MAX_FILES = 4_094
         const val MAX_HASHES_PER_NAME = 2
         const val MAX_FILE_BYTES = 1024L * 1024L * 1024L
-        val BIN_NAME = Regex("[A-Za-z0-9_-]{1,128}\\.bin")
         val SHA_256 = Regex("[0-9a-f]{64}")
         val SERVICE_REASONS = mapOf(
             0 to "AVAILABLE",

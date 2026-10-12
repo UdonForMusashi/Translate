@@ -182,11 +182,10 @@ class InstallationReceiptStore private constructor(
             receipt.files.isEmpty() || receipt.files.size > MAX_FILES ||
             receipt.files.toSet().size != receipt.files.size ||
             recordsByName.values.any { it.size > allowedHashesPerName } ||
-            SPECIAL_FILE !in recordsByName ||
-            receipt.files.none { BIN_NAME.matches(it.name) }
+            !receipt.profile.contentPolicy.isValidFileNameSet(recordsByName.keys)
         ) invalid()
         receipt.files.forEach { file ->
-            if ((file.name != SPECIAL_FILE && !BIN_NAME.matches(file.name)) ||
+            if (!receipt.profile.contentPolicy.isAllowedFileName(file.name) ||
                 file.size < 0 || file.size > MAX_FILE_BYTES || !SHA_256.matches(file.sha256)
             ) invalid()
         }
@@ -230,9 +229,7 @@ class InstallationReceiptStore private constructor(
         const val MAX_FILES = 4_094
         const val MAX_PENDING_HASHES_PER_NAME = 2
         const val MAX_FILE_BYTES = 1024L * 1024L * 1024L
-        const val SPECIAL_FILE = "cfb1d36393fd67385e046b084b7cf7ed"
         val SAFE_VERSION = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
-        val BIN_NAME = Regex("[A-Za-z0-9_-]{1,128}\\.bin")
         val SHA_256 = Regex("[0-9a-f]{64}")
     }
 }
