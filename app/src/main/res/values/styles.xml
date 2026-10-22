@@ -1,7 +1,10 @@
 <resources>
-    <style name="Theme.TranslationInstaller" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.BaristaLatte" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:colorAccent">#6750A4</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#181411</item>
+        <item name="android:navigationBarColor">#181411</item>
+        <item name="android:windowBackground">#181411</item>
+        <item name="android:colorAccent">#D4A373</item>
     </style>
 </resources>

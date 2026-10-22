@@ -8,27 +8,31 @@ enum class GameProfile(
     val packageName: String,
     val destinationRelativeDirectory: String,
     val contentPolicy: ProfileContentPolicy,
+    val isUserSelectable: Boolean,
 ) {
     JP(
-        profileId = decodeTechnical("ZmdvLWpw"),
-        displayName = "FGO JP",
-        packageName = decodeTechnical("Y29tLmFuaXBsZXguZmF0ZWdyYW5kb3JkZXI="),
+        profileId = "fgo-jp",
+        displayName = "Fate/Grand Order — Japão",
+        packageName = "com.aniplex.fategrandorder",
         destinationRelativeDirectory = "files/data/d713/",
         contentPolicy = ProfileContentPolicy.FGO_TRANSLATION,
+        isUserSelectable = true,
     ),
     NA(
-        profileId = decodeTechnical("ZmdvLW5h"),
-        displayName = "FGO NA",
-        packageName = decodeTechnical("Y29tLmFuaXBsZXguZmF0ZWdyYW5kb3JkZXIuZW4="),
+        profileId = "fgo-na",
+        displayName = "Fate/Grand Order — América do Norte",
+        packageName = "com.aniplex.fategrandorder.en",
         destinationRelativeDirectory = "files/data/d713/",
         contentPolicy = ProfileContentPolicy.FGO_TRANSLATION,
+        isUserSelectable = true,
     ),
     BA(
-        profileId = decodeTechnical("Ymx1ZS1hcmNoaXZlLWdsb2JhbA=="),
+        profileId = "blue-archive-global",
         displayName = "Blue Archive (Global)",
-        packageName = decodeTechnical("Y29tLm5leG9uLmJsdWVhcmNoaXZl"),
+        packageName = "com.nexon.bluearchive",
         destinationRelativeDirectory = "files/PUB/Resource/Preload/TableBundles/",
         contentPolicy = ProfileContentPolicy.BLUE_ARCHIVE_DATABASE,
+        isUserSelectable = false,
     );
 
     companion object {

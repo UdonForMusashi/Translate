@@ -7,7 +7,9 @@ import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.security.BundleFailureCode
 import dev.translate.installer.security.BundleValidationException
 import dev.translate.installer.security.ImportLimits
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayInputStream
@@ -43,11 +45,11 @@ class GitHubReleaseClient(
     private val limits: ImportLimits = ImportLimits(),
     private val parser: ReleaseMetadataParser = ReleaseMetadataParser(),
 ) {
-    suspend fun latest(profile: GameProfile): ReleaseAsset {
+    suspend fun latest(profile: GameProfile): ReleaseAsset = withContext(Dispatchers.IO) {
         val repository = RemoteRepositoryCatalog.repository(profile)
         val endpoint = URL("https://api.github.com/repos/$OWNER/$repository/releases/latest")
         val connection = openConnection(endpoint, JSON_ACCEPT)
-        return try {
+        try {
             when (connection.responseCode) {
                 HttpURLConnection.HTTP_OK -> {
                     val bytes = readBounded(connection, MAX_RELEASE_JSON_BYTES)
@@ -74,7 +76,7 @@ class GitHubReleaseClient(
         asset: ReleaseAsset,
         destination: File,
         progress: DownloadProgressSink,
-    ): DownloadResult {
+    ): DownloadResult = withContext(Dispatchers.IO) {
         if (asset.id <= 0 || asset.size !in 1..limits.maxArchiveBytes) {
             fail(BundleFailureCode.RELEASE_ASSET_INVALID)
         }
@@ -89,7 +91,7 @@ class GitHubReleaseClient(
         } catch (exception: RuntimeException) {
             fail(BundleFailureCode.DOWNLOAD_FAILED, exception)
         }
-        return try {
+        try {
             val contentLength = connection.contentLengthLong
             if (contentLength > limits.maxArchiveBytes ||
                 contentLength >= 0 && contentLength != asset.size
@@ -235,7 +237,7 @@ class GitHubReleaseClient(
     private companion object {
         const val OWNER = "UdonForMusashi"
         const val API_VERSION = "2022-11-28"
-        const val USER_AGENT = "TranslationInstaller/0.3.0"
+        const val USER_AGENT = "BaristaLatte/0.4.0"
         const val JSON_ACCEPT = "application/vnd.github+json"
         const val BINARY_ACCEPT = "application/octet-stream"
         const val CONNECT_TIMEOUT_MS = 15_000

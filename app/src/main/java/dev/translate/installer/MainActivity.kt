@@ -2,8 +2,12 @@ package dev.translate.installer
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -14,9 +18,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -33,12 +41,19 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelProvider
 import dev.translate.installer.audit.MessageCode
 import dev.translate.installer.audit.OperationEvent
@@ -51,6 +66,17 @@ import dev.translate.installer.shizuku.ShizukuGateStatus
 import dev.translate.installer.shizuku.ShizukuServiceIdentity
 import dev.translate.installer.ui.ImportUiState
 import dev.translate.installer.ui.ImportViewModel
+import dev.translate.installer.ui.theme.BaristaLatteTheme
+import dev.translate.installer.ui.theme.CafeBackground
+import dev.translate.installer.ui.theme.CafeLine
+import dev.translate.installer.ui.theme.CafeMuted
+import dev.translate.installer.ui.theme.CafeSage
+import dev.translate.installer.ui.theme.CafeSurface
+import dev.translate.installer.ui.theme.CafeSurfaceRaised
+import dev.translate.installer.ui.theme.Espresso
+import dev.translate.installer.ui.theme.LatteCream
+import dev.translate.installer.ui.theme.LatteGold
+import dev.translate.installer.ui.theme.LatteGoldBright
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
@@ -60,15 +86,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         model = ViewModelProvider(this)[ImportViewModel::class.java]
         setContent {
-            MaterialTheme {
+            BaristaLatteTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val state by model.state.collectAsState()
-                    InstallerScreen(
+                    BaristaLatteApp(
                         state = state,
                         onVerifyShizuku = model::verifyShizuku,
                         onProfileSelected = model::selectProfile,
                         onDownloadLatest = model::downloadLatestBundle,
-                        onClearCache = model::clearCache,
                         onCancelImport = model::cancelImport,
                         onGameClosedChanged = model::setGameClosedConfirmed,
                         onInstall = model::installImportedBundle,
@@ -87,40 +112,287 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private const val FATE_GRAND_ORDER_DESTINATION = "fate-grand-order"
+
 @Composable
-private fun InstallerScreen(
+private fun BaristaLatteApp(
     state: ImportUiState,
     onVerifyShizuku: () -> Unit,
     onProfileSelected: (GameProfile) -> Unit,
     onDownloadLatest: () -> Unit,
-    onClearCache: () -> Unit,
     onCancelImport: () -> Unit,
     onGameClosedChanged: (Boolean) -> Unit,
     onInstall: () -> Unit,
     onUninstall: () -> Unit,
 ) {
-    var showDetails by remember { mutableStateOf(true) }
+    var destination by rememberSaveable { mutableStateOf<String?>(null) }
 
-    Scaffold { contentPadding ->
+    if (destination == FATE_GRAND_ORDER_DESTINATION) {
+        InstallerScreen(
+            state = state,
+            onBackToCatalog = { if (!state.isWorking) destination = null },
+            onVerifyShizuku = onVerifyShizuku,
+            onProfileSelected = onProfileSelected,
+            onDownloadLatest = onDownloadLatest,
+            onCancelImport = onCancelImport,
+            onGameClosedChanged = onGameClosedChanged,
+            onInstall = onInstall,
+            onUninstall = onUninstall,
+        )
+    } else {
+        GameCatalogScreen(
+            onFateGrandOrderSelected = { destination = FATE_GRAND_ORDER_DESTINATION },
+        )
+    }
+}
+
+@Composable
+private fun GameCatalogScreen(
+    onFateGrandOrderSelected: () -> Unit,
+) {
+    Scaffold(containerColor = Espresso) { contentPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(CafeBackground, Espresso, Espresso),
+                    ),
+                ),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(contentPadding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                BrandHeader()
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "TRADUÇÕES DISPONÍVEIS",
+                    color = LatteGold,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 2.sp,
+                )
+                Text(
+                    text = "Escolha seu jogo",
+                    style = MaterialTheme.typography.displaySmall,
+                )
+                Text(
+                    text = "Baixe o pacote mais recente e instale a tradução diretamente no Android.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = CafeMuted,
+                )
+
+                CatalogGameCard(
+                    marker = "FGO",
+                    title = "Fate/Grand Order",
+                    description = "Tradução feita pela comunidade Fate Café, disponível para os servidores Japão e América do Norte.",
+                    status = "DISPONÍVEL",
+                    accent = LatteGold,
+                    enabled = true,
+                    onClick = onFateGrandOrderSelected,
+                )
+                CatalogGameCard(
+                    marker = "BA",
+                    title = "Blue Archive",
+                    description = "A tradução Global está sendo preparada e será liberada em breve.",
+                    status = "EM BREVE",
+                    accent = CafeSage,
+                    enabled = false,
+                    onClick = {},
+                )
+
+                Text(
+                    text = "Barista Latte • Traduções PT-BR",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CafeMuted.copy(alpha = 0.72f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BrandHeader(compact: Boolean = false) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Surface(
+            modifier = Modifier.size(if (compact) 46.dp else 58.dp),
+            shape = CircleShape,
+            color = LatteGold.copy(alpha = 0.12f),
+            border = BorderStroke(1.dp, LatteGold.copy(alpha = 0.42f)),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = "BL",
+                    color = LatteGoldBright,
+                    fontFamily = FontFamily.Serif,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = if (compact) 16.sp else 19.sp,
+                )
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                text = "BARISTA LATTE",
+                color = LatteCream,
+                fontSize = if (compact) 15.sp else 18.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.6.sp,
+            )
+            Text(
+                text = if (compact) "Instalador de traduções" else "Traduções servidas com cuidado",
+                style = MaterialTheme.typography.bodySmall,
+                color = CafeMuted,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CatalogGameCard(
+    marker: String,
+    title: String,
+    description: String,
+    status: String,
+    accent: Color,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(24.dp)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.62f)
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        border = BorderStroke(1.dp, accent.copy(alpha = if (enabled) 0.42f else 0.22f)),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.linearGradient(
+                        listOf(accent.copy(alpha = 0.14f), CafeSurface, CafeSurface),
+                    ),
+                )
+                .padding(20.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Surface(
+                        modifier = Modifier.size(52.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        color = accent.copy(alpha = 0.13f),
+                        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = marker,
+                                color = accent,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 14.sp,
+                                letterSpacing = 1.sp,
+                            )
+                        }
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(100.dp),
+                        color = accent.copy(alpha = 0.12f),
+                    ) {
+                        Text(
+                            text = status,
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                            color = accent,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.2.sp,
+                        )
+                    }
+                }
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = LatteCream,
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = CafeMuted,
+                )
+                if (enabled) {
+                    Text(
+                        text = "Selecionar jogo  →",
+                        color = accent,
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InstallerScreen(
+    state: ImportUiState,
+    onBackToCatalog: () -> Unit,
+    onVerifyShizuku: () -> Unit,
+    onProfileSelected: (GameProfile) -> Unit,
+    onDownloadLatest: () -> Unit,
+    onCancelImport: () -> Unit,
+    onGameClosedChanged: (Boolean) -> Unit,
+    onInstall: () -> Unit,
+    onUninstall: () -> Unit,
+) {
+    var showDetails by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = true) {
+        if (!state.isWorking) onBackToCatalog()
+    }
+
+    Scaffold(containerColor = Espresso) { contentPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(contentPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(20.dp),
+                .padding(horizontal = 20.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            OutlinedButton(
+                onClick = onBackToCatalog,
+                enabled = !state.isWorking,
+            ) {
+                Text("←  Todos os jogos")
+            }
+            BrandHeader(compact = true)
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = "Translation Installer",
+                text = "Fate/Grand Order",
                 style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "Primeiro verifique o Shizuku. Depois escolha FGO JP, FGO NA ou Blue Archive Global e baixe a Release mais recente.",
+                text = "Conecte o Shizuku, escolha sua região e baixe a tradução mais recente.",
                 style = MaterialTheme.typography.bodyMedium,
+                color = CafeMuted,
             )
 
-            SectionCard(title = "1. Conexão com Shizuku") {
+            SectionCard(title = "Conexão com Shizuku", step = "01") {
                 Text(
                     "O Shizuku é um aplicativo separado: o usuário precisa baixá-lo, iniciá-lo e autorizar este instalador.",
                     style = MaterialTheme.typography.bodySmall,
@@ -132,24 +404,15 @@ private fun InstallerScreen(
                 )
             }
 
-            SectionCard(title = "2. Jogo e região") {
-                GameProfile.entries.forEach { profile ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(
-                                enabled = state.shizukuGate.isApproved && !state.isWorking,
-                            ) {
-                                onProfileSelected(profile)
-                            },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(
+            SectionCard(title = "Região do jogo", step = "02") {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    listOf(GameProfile.JP, GameProfile.NA).forEach { profile ->
+                        RegionOption(
+                            profile = profile,
                             selected = state.selectedProfile == profile,
-                            onClick = { onProfileSelected(profile) },
                             enabled = state.shizukuGate.isApproved && !state.isWorking,
+                            onSelected = { onProfileSelected(profile) },
                         )
-                        Text(profile.displayName, fontWeight = FontWeight.SemiBold)
                     }
                 }
                 if (!state.shizukuGate.isApproved) {
@@ -160,7 +423,7 @@ private fun InstallerScreen(
                 }
             }
 
-            SectionCard(title = "3. Pacote oficial") {
+            SectionCard(title = "Pacote oficial", step = "03") {
                 Button(
                     onClick = onDownloadLatest,
                     enabled = state.shizukuGate.isApproved &&
@@ -171,23 +434,12 @@ private fun InstallerScreen(
                     Text("Baixar pacote mais recente")
                 }
                 Text(
-                    text = "O aplicativo aceita pacotes somente pela última Release pública do perfil selecionado. Antes de cada instalação, o GitHub é consultado novamente e um cache desatualizado é substituído.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                OutlinedButton(
-                    onClick = onClearCache,
-                    enabled = !state.isWorking,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Limpar cache")
-                }
-                Text(
-                    text = "Remove o ZIP privado mais recente e seus arquivos temporários. A tradução já instalada e seu recibo não são alterados.",
+                    text = "O aplicativo aceita pacotes somente pela última Release pública do perfil selecionado. Antes de cada instalação, o GitHub é consultado novamente e um cache desatualizado é substituído. Após uma instalação concluída, o ZIP e os arquivos temporários são apagados automaticamente.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
 
-            SectionCard(title = "4. Progresso") {
+            SectionCard(title = "Progresso", step = "04") {
                 val currentPhase = state.currentPhase
                 Text(
                     text = currentPhase?.name ?: "AGUARDANDO",
@@ -250,7 +502,7 @@ private fun InstallerScreen(
             }
 
             if (state.importedBundle != null || state.installationReceipt != null) {
-                SectionCard(title = "5. Instalação") {
+                SectionCard(title = "Instalação", step = "05") {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -264,11 +516,11 @@ private fun InstallerScreen(
                             onCheckedChange = onGameClosedChanged,
                             enabled = !state.isWorking,
                         )
-                        Text("Confirmo que fechei completamente o jogo")
+                        Text("Para instalar, confirmo que fechei completamente o jogo")
                     }
                     if (state.importedBundle != null) {
                         Text(
-                            "A instalação altera diretamente somente os arquivos autenticados. Não cria backup, journal ou staging dentro do jogo. No FGO, arquivos .bin assinados podem ser adicionados; no Blue Archive, o ExcelDB.db original precisa existir.",
+                            "A instalação altera diretamente somente os arquivos autenticados do Fate/Grand Order. Não cria backup, journal ou staging dentro do jogo.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Button(
@@ -298,8 +550,7 @@ private fun InstallerScreen(
                         )
                         OutlinedButton(
                             onClick = onUninstall,
-                            enabled = state.shizukuGate.isApproved &&
-                                state.gameClosedConfirmed && !state.isWorking,
+                            enabled = state.shizukuGate.isApproved && !state.isWorking,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text("Desinstalar tradução")
@@ -333,10 +584,87 @@ private fun InstallerScreen(
             }
 
             Text(
-                text = "O Shizuku deve estar instalado, iniciado e autorizado durante toda a operação.",
+                text = "Barista Latte • O Shizuku deve permanecer iniciado e autorizado durante toda a operação.",
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodySmall,
+                color = CafeMuted,
             )
             Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun RegionOption(
+    profile: GameProfile,
+    selected: Boolean,
+    enabled: Boolean,
+    onSelected: () -> Unit,
+) {
+    val accent = if (selected) LatteGold else CafeMuted
+    val regionName = when (profile) {
+        GameProfile.JP -> "Japão"
+        GameProfile.NA -> "América do Norte"
+        GameProfile.BA -> "Global"
+    }
+    val regionCode = when (profile) {
+        GameProfile.JP -> "JP"
+        GameProfile.NA -> "NA"
+        GameProfile.BA -> "GL"
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(enabled = enabled, onClick = onSelected),
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) LatteGold.copy(alpha = 0.10f) else CafeSurfaceRaised,
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (selected) LatteGold.copy(alpha = 0.72f) else CafeLine,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Surface(
+                modifier = Modifier.size(38.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = accent.copy(alpha = 0.12f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = regionCode,
+                        color = accent,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = regionName,
+                    color = if (enabled) LatteCream else CafeMuted,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = if (profile == GameProfile.JP) {
+                        "Servidor japonês"
+                    } else {
+                        "Servidor global em inglês"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CafeMuted,
+                )
+            }
+            RadioButton(
+                selected = selected,
+                onClick = onSelected,
+                enabled = enabled,
+            )
         }
     }
 }
@@ -382,18 +710,45 @@ private fun ShizukuGateContent(
 @Composable
 private fun SectionCard(
     title: String,
+    step: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = CafeSurface),
+        border = BorderStroke(1.dp, CafeLine.copy(alpha = 0.9f)),
+    ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (step != null) {
+                    Surface(
+                        shape = RoundedCornerShape(9.dp),
+                        color = LatteGold.copy(alpha = 0.12f),
+                    ) {
+                        Text(
+                            text = step,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            color = LatteGold,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp,
+                        )
+                    }
+                }
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
             content()
         }
     }
@@ -453,6 +808,7 @@ private fun eventMessage(code: MessageCode): String = when (code) {
     MessageCode.CACHED_RELEASE_STALE -> "O ZIP em cache está desatualizado e será substituído"
     MessageCode.CACHE_CLEAR_STARTED -> "Limpando o cache privado"
     MessageCode.CACHE_CLEAR_SUCCEEDED -> "Cache privado removido"
+    MessageCode.CACHE_CLEAR_FAILED -> "A tradução foi instalada, mas a limpeza automática do cache falhou"
     MessageCode.DOWNLOAD_STARTED -> "Download seguro iniciado"
     MessageCode.DOWNLOAD_PROGRESS -> "Baixando pacote"
     MessageCode.DOWNLOAD_SUCCEEDED -> "Download concluído"
@@ -564,6 +920,8 @@ private fun installerFailureMessage(code: String): String = when (code) {
         "Não foi possível salvar o recibo privado antes da instalação; nenhum arquivo deve ser alterado."
     "RECEIPT_DELETE_FAILED" ->
         "Os arquivos foram removidos, mas não foi possível apagar o recibo privado. Tente desinstalar novamente."
+    "CACHE_CLEAR_FAILED" ->
+        "A tradução foi instalada e verificada, mas o cache não pôde ser apagado automaticamente. Ele será removido na próxima operação de download."
     else -> "A instalação foi recusada com o código $code."
 }
 

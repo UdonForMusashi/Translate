@@ -92,68 +92,10 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         importJob?.cancel()
     }
 
-    fun clearCache() {
-        if (_state.value.isWorking || importJob?.isActive == true) return
-        val emitter = TransactionEventEmitter(
-            UUID.randomUUID().toString(),
-            sink = OperationEventSink(::onEvent),
-        )
-        _state.update {
-            it.copy(
-                isWorking = true,
-                currentPhase = OperationPhase.CLEANUP,
-                progress = null,
-                events = emptyList(),
-                failureCode = null,
-            )
-        }
-        importJob = viewModelScope.launch {
-            try {
-                emitter.emit(
-                    phase = OperationPhase.CLEANUP,
-                    status = OperationStatus.STARTED,
-                    messageCode = MessageCode.CACHE_CLEAR_STARTED,
-                )
-                bundleStager.clearPrivateStaging()
-                emitter.emit(
-                    phase = OperationPhase.CLEANUP,
-                    status = OperationStatus.SUCCEEDED,
-                    messageCode = MessageCode.CACHE_CLEAR_SUCCEEDED,
-                )
-                _state.update {
-                    it.copy(
-                        isWorking = false,
-                        currentPhase = OperationPhase.CLEANUP,
-                        progress = 1f,
-                        importedBundle = null,
-                        failureCode = null,
-                        installerCapabilities = null,
-                        installerFailureCode = it.installerFailureCode?.takeIf { code ->
-                            code.startsWith("RECEIPT_")
-                        },
-                        gameClosedConfirmed = false,
-                    )
-                }
-            } catch (exception: BundleValidationException) {
-                emitter.emit(
-                    phase = OperationPhase.CLEANUP,
-                    status = OperationStatus.FAILED,
-                    messageCode = MessageCode.OPERATION_FAILED,
-                    failureCode = exception.code.name,
-                )
-                _state.update {
-                    it.copy(
-                        isWorking = false,
-                        progress = null,
-                        failureCode = exception.code,
-                    )
-                }
-            }
-        }
-    }
-
     fun selectProfile(profile: GameProfile) {
-        if (_state.value.isWorking || !_state.value.shizukuGate.isApproved) return
+        if (!profile.isUserSelectable || _state.value.isWorking ||
+            !_state.value.shizukuGate.isApproved
+        ) return
         var receiptInvalid = false
         val receipt = try {
             receiptStore.load(profile)
@@ -189,7 +131,9 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun startBundleDownload() {
         val selectedProfile = _state.value.selectedProfile ?: return
-        if (!_state.value.shizukuGate.isApproved || importJob?.isActive == true) return
+        if (!selectedProfile.isUserSelectable || !_state.value.shizukuGate.isApproved ||
+            importJob?.isActive == true
+        ) return
 
         val transactionId = UUID.randomUUID().toString()
         _state.update {
@@ -332,16 +276,19 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                     status = OperationStatus.SUCCEEDED,
                     messageCode = MessageCode.INSTALLATION_SUCCEEDED,
                 )
+                val cacheCleared = clearCacheAfterInstallation(emitter)
                 _state.update {
                     it.copy(
                         isWorking = false,
-                        currentPhase = OperationPhase.VERIFY,
-                        progress = 1f,
+                        currentPhase = OperationPhase.CLEANUP,
+                        progress = if (cacheCleared) 1f else null,
                         failureCode = null,
-                        installerFailureCode = null,
+                        installerCapabilities = null,
+                        installerFailureCode = if (cacheCleared) null else "CACHE_CLEAR_FAILED",
                         isInstalled = outcome.installed,
-                        importedBundle = readyBundle,
+                        importedBundle = null,
                         installationReceipt = installedReceipt,
+                        gameClosedConfirmed = false,
                     )
                 }
             } catch (exception: CancellationException) {
@@ -394,6 +341,37 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                     ),
                 )
             }
+        }
+    }
+
+    private suspend fun clearCacheAfterInstallation(
+        emitter: TransactionEventEmitter,
+    ): Boolean {
+        emitter.emit(
+            phase = OperationPhase.CLEANUP,
+            status = OperationStatus.STARTED,
+            messageCode = MessageCode.CACHE_CLEAR_STARTED,
+        )
+        return try {
+            bundleStager.clearPrivateStaging()
+            emitter.emit(
+                phase = OperationPhase.CLEANUP,
+                status = OperationStatus.SUCCEEDED,
+                messageCode = MessageCode.CACHE_CLEAR_SUCCEEDED,
+            )
+            true
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            val failureCode = (exception as? BundleValidationException)?.code
+                ?: BundleFailureCode.IO_ERROR
+            emitter.emit(
+                phase = OperationPhase.CLEANUP,
+                status = OperationStatus.FAILED,
+                messageCode = MessageCode.CACHE_CLEAR_FAILED,
+                failureCode = failureCode.name,
+            )
+            false
         }
     }
 
@@ -480,7 +458,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val profile = snapshot.selectedProfile ?: return
         val receipt = snapshot.installationReceipt ?: return
         if (receipt.profile != profile || !snapshot.shizukuGate.isApproved ||
-            snapshot.isWorking || !snapshot.gameClosedConfirmed
+            snapshot.isWorking
         ) return
 
         val emitter = TransactionEventEmitter(
