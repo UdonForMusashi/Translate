@@ -1,12 +1,12 @@
-# Barista Latte
+# Fate Café
 
-Barista Latte é um aplicativo Android para baixar e aplicar traduções de jogos.
+Fate Café é um aplicativo Android para baixar e aplicar traduções de jogos.
 O aplicativo consulta as Releases publicadas no GitHub e baixa o ZIP mais
 recente da tradução escolhida.
 
 Atualmente, o aplicativo oferece suporte a **Fate/Grand Order** nos servidores
-da América do Norte (NA) e do Japão (JP). Futuramente, o Barista Latte também
-terá traduções para outros jogos.
+da América do Norte (NA) e do Japão (JP), além de **Blue Archive** no servidor
+Global.
 
 ## Como usar
 
@@ -14,8 +14,27 @@ terá traduções para outros jogos.
 recente do GitHub.
 
 Também é necessário instalar, iniciar e autorizar o aplicativo **Shizuku**. O
-Barista Latte usa a permissão concedida pelo Shizuku para aplicar a tradução nos
+Fate Café usa a permissão concedida pelo Shizuku para aplicar a tradução nos
 arquivos do jogo.
+
+## Tradução de Blue Archive
+
+No Blue Archive Global, o aplicativo baixa o pacote PT-BR mais recente e
+substitui o banco de textos do jogo. Abra o Blue Archive e conclua o download
+inicial dos recursos antes de instalar a tradução. Feche completamente o jogo
+durante a instalação.
+
+A tradução foi preparada a partir dos textos originais em coreano, preservando
+os termos usados na versão Global. A cobertura atual do projeto é:
+
+- **Prólogo:** completo.
+- **Volume 1 — Foreclosure Task Force:** capítulos 1, 2 e 3 completos, com 20,
+  20 e 43 episódios, respectivamente.
+- **Volume 2 — Clockwork Flower Pavane:** capítulo 1 completo, com 20 episódios.
+- **Volume 3 — Eden Treaty:** capítulos 1, 2 e 3 completos, com 17, 20 e 25
+  episódios, respectivamente.
+- **Volume 4 — Rabbit of Caerbannog:** capítulo 1 em andamento; episódios 1–10
+  traduzidos.
 
 ## Tradução de Fate/Grand Order
 

@@ -92,6 +92,42 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         importJob?.cancel()
     }
 
+    fun clearProfileSelection() {
+        if (_state.value.isWorking) return
+        _state.update {
+            it.copy(
+                selectedProfile = null,
+                currentPhase = null,
+                progress = null,
+                events = emptyList(),
+                importedBundle = null,
+                failureCode = null,
+                installerCapabilities = null,
+                installerFailureCode = null,
+                gameClosedConfirmed = false,
+                isInstalled = false,
+                installationReceipt = null,
+            )
+        }
+    }
+
+    fun resetCompletedInstallationUi() {
+        val snapshot = _state.value
+        if (snapshot.isWorking || !snapshot.isInstalled ||
+            snapshot.installationReceipt?.status != ReceiptStatus.INSTALLED ||
+            snapshot.installerFailureCode != null
+        ) return
+        _state.update {
+            it.copy(
+                currentPhase = null,
+                progress = null,
+                events = emptyList(),
+                installerCapabilities = null,
+                gameClosedConfirmed = false,
+            )
+        }
+    }
+
     fun selectProfile(profile: GameProfile) {
         if (!profile.isUserSelectable || _state.value.isWorking ||
             !_state.value.shizukuGate.isApproved

@@ -37,6 +37,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelProvider
 import dev.translate.installer.audit.MessageCode
 import dev.translate.installer.audit.OperationEvent
+import dev.translate.installer.audit.OperationPhase
 import dev.translate.installer.audit.OperationStatus
 import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.installer.ReceiptStatus
@@ -66,7 +68,7 @@ import dev.translate.installer.shizuku.ShizukuGateStatus
 import dev.translate.installer.shizuku.ShizukuServiceIdentity
 import dev.translate.installer.ui.ImportUiState
 import dev.translate.installer.ui.ImportViewModel
-import dev.translate.installer.ui.theme.BaristaLatteTheme
+import dev.translate.installer.ui.theme.FateCafeTheme
 import dev.translate.installer.ui.theme.CafeBackground
 import dev.translate.installer.ui.theme.CafeLine
 import dev.translate.installer.ui.theme.CafeMuted
@@ -86,13 +88,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         model = ViewModelProvider(this)[ImportViewModel::class.java]
         setContent {
-            BaristaLatteTheme {
+            FateCafeTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val state by model.state.collectAsState()
-                    BaristaLatteApp(
+                    FateCafeApp(
                         state = state,
                         onVerifyShizuku = model::verifyShizuku,
                         onProfileSelected = model::selectProfile,
+                        onClearProfileSelection = model::clearProfileSelection,
+                        onResetCompletedInstallation = model::resetCompletedInstallationUi,
                         onDownloadLatest = model::downloadLatestBundle,
                         onCancelImport = model::cancelImport,
                         onGameClosedChanged = model::setGameClosedConfirmed,
@@ -113,12 +117,45 @@ class MainActivity : ComponentActivity() {
 }
 
 private const val FATE_GRAND_ORDER_DESTINATION = "fate-grand-order"
+private const val BLUE_ARCHIVE_DESTINATION = "blue-archive"
+
+private data class InstallerPresentation(
+    val title: String,
+    val introduction: String,
+    val profileSectionTitle: String,
+    val profiles: List<GameProfile>,
+    val installationDescription: String,
+)
+
+private val FATE_GRAND_ORDER_PRESENTATION = InstallerPresentation(
+    title = "Fate/Grand Order",
+    introduction = "Conecte o Shizuku, escolha sua região e baixe a tradução mais recente.",
+    profileSectionTitle = "Região do jogo",
+    profiles = listOf(GameProfile.JP, GameProfile.NA),
+    installationDescription =
+        "A instalação substitui de forma atômica somente os arquivos autenticados do " +
+            "Fate/Grand Order. O temporário de gravação é removido ao concluir e nenhum " +
+            "backup é mantido dentro do jogo.",
+)
+
+private val BLUE_ARCHIVE_PRESENTATION = InstallerPresentation(
+    title = "Blue Archive",
+    introduction =
+        "Conecte o Shizuku e baixe a tradução PT-BR mais recente do servidor Global.",
+    profileSectionTitle = "Servidor do jogo",
+    profiles = listOf(GameProfile.BA),
+    installationDescription =
+        "A instalação substitui de forma atômica somente o ExcelDB.db autenticado do " +
+            "Blue Archive Global. O temporário de gravação é removido ao concluir.",
+)
 
 @Composable
-private fun BaristaLatteApp(
+private fun FateCafeApp(
     state: ImportUiState,
     onVerifyShizuku: () -> Unit,
     onProfileSelected: (GameProfile) -> Unit,
+    onClearProfileSelection: () -> Unit,
+    onResetCompletedInstallation: () -> Unit,
     onDownloadLatest: () -> Unit,
     onCancelImport: () -> Unit,
     onGameClosedChanged: (Boolean) -> Unit,
@@ -126,13 +163,25 @@ private fun BaristaLatteApp(
     onUninstall: () -> Unit,
 ) {
     var destination by rememberSaveable { mutableStateOf<String?>(null) }
+    val presentation = when (destination) {
+        FATE_GRAND_ORDER_DESTINATION -> FATE_GRAND_ORDER_PRESENTATION
+        BLUE_ARCHIVE_DESTINATION -> BLUE_ARCHIVE_PRESENTATION
+        else -> null
+    }
 
-    if (destination == FATE_GRAND_ORDER_DESTINATION) {
+    if (presentation != null) {
         InstallerScreen(
             state = state,
-            onBackToCatalog = { if (!state.isWorking) destination = null },
+            presentation = presentation,
+            onBackToCatalog = {
+                if (!state.isWorking) {
+                    onClearProfileSelection()
+                    destination = null
+                }
+            },
             onVerifyShizuku = onVerifyShizuku,
             onProfileSelected = onProfileSelected,
+            onResetCompletedInstallation = onResetCompletedInstallation,
             onDownloadLatest = onDownloadLatest,
             onCancelImport = onCancelImport,
             onGameClosedChanged = onGameClosedChanged,
@@ -141,7 +190,14 @@ private fun BaristaLatteApp(
         )
     } else {
         GameCatalogScreen(
-            onFateGrandOrderSelected = { destination = FATE_GRAND_ORDER_DESTINATION },
+            onFateGrandOrderSelected = {
+                onClearProfileSelection()
+                destination = FATE_GRAND_ORDER_DESTINATION
+            },
+            onBlueArchiveSelected = {
+                onClearProfileSelection()
+                destination = BLUE_ARCHIVE_DESTINATION
+            },
         )
     }
 }
@@ -149,6 +205,7 @@ private fun BaristaLatteApp(
 @Composable
 private fun GameCatalogScreen(
     onFateGrandOrderSelected: () -> Unit,
+    onBlueArchiveSelected: () -> Unit,
 ) {
     Scaffold(containerColor = Espresso) { contentPadding ->
         Box(
@@ -200,15 +257,15 @@ private fun GameCatalogScreen(
                 CatalogGameCard(
                     marker = "BA",
                     title = "Blue Archive",
-                    description = "A tradução Global está sendo preparada e será liberada em breve.",
-                    status = "EM BREVE",
+                    description = "Tradução PT-BR disponível para o servidor Global.",
+                    status = "DISPONÍVEL",
                     accent = CafeSage,
-                    enabled = false,
-                    onClick = {},
+                    enabled = true,
+                    onClick = onBlueArchiveSelected,
                 )
 
                 Text(
-                    text = "Barista Latte • Traduções PT-BR",
+                    text = "Fate Café • Traduções PT-BR",
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.bodySmall,
@@ -234,7 +291,7 @@ private fun BrandHeader(compact: Boolean = false) {
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Text(
-                    text = "BL",
+                    text = "FC",
                     color = LatteGoldBright,
                     fontFamily = FontFamily.Serif,
                     fontWeight = FontWeight.Bold,
@@ -244,7 +301,7 @@ private fun BrandHeader(compact: Boolean = false) {
         }
         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
-                text = "BARISTA LATTE",
+                text = "FATE CAFÉ",
                 color = LatteCream,
                 fontSize = if (compact) 15.sp else 18.sp,
                 fontWeight = FontWeight.Bold,
@@ -350,9 +407,11 @@ private fun CatalogGameCard(
 @Composable
 private fun InstallerScreen(
     state: ImportUiState,
+    presentation: InstallerPresentation,
     onBackToCatalog: () -> Unit,
     onVerifyShizuku: () -> Unit,
     onProfileSelected: (GameProfile) -> Unit,
+    onResetCompletedInstallation: () -> Unit,
     onDownloadLatest: () -> Unit,
     onCancelImport: () -> Unit,
     onGameClosedChanged: (Boolean) -> Unit,
@@ -360,6 +419,18 @@ private fun InstallerScreen(
     onUninstall: () -> Unit,
 ) {
     var showDetails by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
+    val selectedProfileBelongsToGame = state.selectedProfile in presentation.profiles
+    val installationJustFinished = state.isInstalled && !state.isWorking &&
+        state.currentPhase == OperationPhase.CLEANUP && state.installerFailureCode == null
+
+    LaunchedEffect(installationJustFinished) {
+        if (installationJustFinished) {
+            showDetails = false
+            onResetCompletedInstallation()
+            scrollState.animateScrollTo(0)
+        }
+    }
 
     BackHandler(enabled = true) {
         if (!state.isWorking) onBackToCatalog()
@@ -370,7 +441,7 @@ private fun InstallerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(contentPadding)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
                 .padding(horizontal = 20.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -383,14 +454,40 @@ private fun InstallerScreen(
             BrandHeader(compact = true)
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = "Fate/Grand Order",
+                text = presentation.title,
                 style = MaterialTheme.typography.headlineMedium,
             )
             Text(
-                text = "Conecte o Shizuku, escolha sua região e baixe a tradução mais recente.",
+                text = presentation.introduction,
                 style = MaterialTheme.typography.bodyMedium,
                 color = CafeMuted,
             )
+            if (selectedProfileBelongsToGame && state.isInstalled) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    color = CafeSage.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, CafeSage.copy(alpha = 0.5f)),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "Tradução instalada com sucesso",
+                            color = CafeSage,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        state.installationReceipt?.let { receipt ->
+                            Text(
+                                text = "Versão ${receipt.bundleVersion} pronta para uso.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = CafeMuted,
+                            )
+                        }
+                    }
+                }
+            }
 
             SectionCard(title = "Conexão com Shizuku", step = "01") {
                 Text(
@@ -404,9 +501,9 @@ private fun InstallerScreen(
                 )
             }
 
-            SectionCard(title = "Região do jogo", step = "02") {
+            SectionCard(title = presentation.profileSectionTitle, step = "02") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    listOf(GameProfile.JP, GameProfile.NA).forEach { profile ->
+                    presentation.profiles.forEach { profile ->
                         RegionOption(
                             profile = profile,
                             selected = state.selectedProfile == profile,
@@ -427,7 +524,7 @@ private fun InstallerScreen(
                 Button(
                     onClick = onDownloadLatest,
                     enabled = state.shizukuGate.isApproved &&
-                        state.selectedProfile != null &&
+                        selectedProfileBelongsToGame &&
                         !state.isWorking,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -501,7 +598,9 @@ private fun InstallerScreen(
                 }
             }
 
-            if (state.importedBundle != null || state.installationReceipt != null) {
+            if (selectedProfileBelongsToGame &&
+                (state.importedBundle != null || state.installationReceipt != null)
+            ) {
                 SectionCard(title = "Instalação", step = "05") {
                     Row(
                         modifier = Modifier
@@ -516,11 +615,14 @@ private fun InstallerScreen(
                             onCheckedChange = onGameClosedChanged,
                             enabled = !state.isWorking,
                         )
-                        Text("Para instalar, confirmo que fechei completamente o jogo")
+                        Text(
+                            "Para instalar, confirmo que fechei completamente o " +
+                                presentation.title,
+                        )
                     }
                     if (state.importedBundle != null) {
                         Text(
-                            "A instalação altera diretamente somente os arquivos autenticados do Fate/Grand Order. Não cria backup, journal ou staging dentro do jogo.",
+                            presentation.installationDescription,
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Button(
@@ -584,7 +686,7 @@ private fun InstallerScreen(
             }
 
             Text(
-                text = "Barista Latte • O Shizuku deve permanecer iniciado e autorizado durante toda a operação.",
+                text = "Fate Café • O Shizuku deve permanecer iniciado e autorizado durante toda a operação.",
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodySmall,

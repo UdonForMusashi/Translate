@@ -9,7 +9,10 @@ import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 
 internal data class PrivilegedProfile(
@@ -77,7 +80,7 @@ internal class TransactionalFileEngine(
     @Synchronized
     fun probe(profile: PrivilegedProfile, requiredBytes: Long) = guarded {
         val root = requireRoot(profile)
-        cleanupLegacyArtifacts(profile, root)
+        cleanupManagedArtifacts(profile, root)
         ensureSpace(root, requiredBytes, reclaimableBytes = 0)
     }
 
@@ -92,46 +95,49 @@ internal class TransactionalFileEngine(
     ) = guarded {
         val record = validateRecord(profile, fileName, expectedSize, expectedSha256)
         val root = requireRoot(profile)
-        cleanupLegacyArtifacts(profile, root)
+        cleanupManagedArtifacts(profile, root)
         val target = safeChild(root, record.name)
-        val targetExisted = target.exists()
+        val targetExisted = Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)
         if (targetExisted) {
             requireExistingRegularFile(target)
         } else if (!profile.contentPolicy.mayCreateMissingFile(record.name)) {
             throw InstallEngineException(InstallError.TARGET_FILE_MISSING)
         }
-        ensureSpace(
-            root,
-            record.size,
-            reclaimableBytes = target.length().takeIf { targetExisted } ?: 0,
-        )
+        ensureSpace(root, record.size, reclaimableBytes = 0)
 
         verifySource(input, record)
         input.channel.position(0)
 
-        var targetWasOpened = false
+        val temporary = safeChild(root, atomicTemporaryName(record.name))
+        deleteManagedTemporary(temporary)
+        val targetPermissions = if (targetExisted) readPosixPermissions(target) else null
         try {
-            val openOptions = if (targetExisted) {
-                arrayOf<java.nio.file.OpenOption>(
-                    StandardOpenOption.WRITE,
-                    StandardOpenOption.TRUNCATE_EXISTING,
-                    LinkOption.NOFOLLOW_LINKS,
-                )
-            } else {
-                arrayOf<java.nio.file.OpenOption>(
-                    StandardOpenOption.WRITE,
-                    StandardOpenOption.CREATE_NEW,
-                    LinkOption.NOFOLLOW_LINKS,
-                )
-            }
-            FileChannel.open(target.toPath(), *openOptions).use { output ->
-                targetWasOpened = true
+            FileChannel.open(
+                temporary.toPath(),
+                StandardOpenOption.WRITE,
+                StandardOpenOption.CREATE_NEW,
+                LinkOption.NOFOLLOW_LINKS,
+            ).use { output ->
                 copyVerifiedSource(input.channel, output, record, progress)
                 output.force(true)
             }
+            verifyTarget(temporary, record)
+            targetPermissions?.let { applyPosixPermissions(temporary, it) }
+
+            if (targetExisted) {
+                requireExistingRegularFile(target)
+            } else if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                unsafe()
+            }
+            Files.move(
+                temporary.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
             verifyTarget(target, record)
         } catch (exception: Exception) {
-            if (targetWasOpened) deleteTouchedTarget(target)
+            deleteManagedTemporary(temporary)
             throw exception
         }
     }
@@ -140,7 +146,7 @@ internal class TransactionalFileEngine(
     fun verifyInstalled(profile: PrivilegedProfile, records: List<PrivilegedInstalledFile>) = guarded {
         validateRecords(profile, records)
         val root = requireRoot(profile)
-        cleanupLegacyArtifacts(profile, root)
+        cleanupManagedArtifacts(profile, root)
         records.forEach { record ->
             val target = safeChild(root, record.name)
             requireExistingRegularFile(target)
@@ -156,7 +162,7 @@ internal class TransactionalFileEngine(
     ) = guarded {
         validateRecords(profile, records, allowAlternatives = true)
         val root = requireRoot(profile)
-        cleanupLegacyArtifacts(profile, root)
+        cleanupManagedArtifacts(profile, root)
 
         val recordsByName = records.groupBy { it.name }
 
@@ -276,8 +282,10 @@ internal class TransactionalFileEngine(
     }
 
     private fun requireExistingRegularFile(file: File) {
-        if (!file.exists()) throw InstallEngineException(InstallError.TARGET_FILE_MISSING)
-        if (!file.isFile || Files.isSymbolicLink(file.toPath())) unsafe()
+        if (!Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            throw InstallEngineException(InstallError.TARGET_FILE_MISSING)
+        }
+        if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) unsafe()
     }
 
     private fun verifyTarget(file: File, record: PrivilegedInstalledFile) {
@@ -289,10 +297,19 @@ internal class TransactionalFileEngine(
     private fun targetMatches(file: File, record: PrivilegedInstalledFile): Boolean =
         file.length() == record.size && sha256(file) == record.sha256
 
-    private fun deleteTouchedTarget(target: File) {
-        if (!target.exists()) return
-        if (!target.isFile || Files.isSymbolicLink(target.toPath())) return
-        if (!target.delete()) throw InstallEngineException(InstallError.IO_FAILURE)
+    private fun readPosixPermissions(file: File): Set<PosixFilePermission>? =
+        Files.getFileAttributeView(
+            file.toPath(),
+            PosixFileAttributeView::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )?.readAttributes()?.permissions()
+
+    private fun applyPosixPermissions(file: File, permissions: Set<PosixFilePermission>) {
+        Files.getFileAttributeView(
+            file.toPath(),
+            PosixFileAttributeView::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )?.setPermissions(permissions)
     }
 
     private fun ensureSpace(root: File, requiredBytes: Long, reclaimableBytes: Long) {
@@ -338,14 +355,35 @@ internal class TransactionalFileEngine(
         }
     }
 
-    private fun cleanupLegacyArtifacts(profile: PrivilegedProfile, root: File) {
-        if (profile.contentPolicy != ProfileContentPolicy.FGO_TRANSLATION) return
+    private fun cleanupManagedArtifacts(profile: PrivilegedProfile, root: File) {
         val children = root.listFiles() ?: io()
+        children.forEach { child ->
+            val prefix = ATOMIC_TEMPORARY_PREFIXES.firstOrNull {
+                child.name.startsWith(it) && child.name.endsWith(ATOMIC_TEMPORARY_SUFFIX)
+            }
+            val originalName = prefix?.let {
+                child.name.removePrefix(it).removeSuffix(ATOMIC_TEMPORARY_SUFFIX)
+            }
+            if (originalName != null && profile.contentPolicy.isAllowedFileName(originalName)) {
+                deleteManagedTemporary(child)
+            }
+        }
+        if (profile.contentPolicy != ProfileContentPolicy.FGO_TRANSLATION) return
         children.forEach { child ->
             if (child.name in LEGACY_FIXED_NAMES || LEGACY_TRANSACTION.matches(child.name)) {
                 safeDeleteLegacyTree(child)
             }
         }
+    }
+
+    private fun atomicTemporaryName(fileName: String) =
+        "$ATOMIC_TEMPORARY_PREFIX$fileName$ATOMIC_TEMPORARY_SUFFIX"
+
+    private fun deleteManagedTemporary(file: File) {
+        val path = file.toPath()
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return
+        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) unsafe()
+        Files.delete(path)
     }
 
     private fun safeDeleteLegacyTree(root: File) {
@@ -385,6 +423,12 @@ internal class TransactionalFileEngine(
         private const val MAX_FILE_BYTES = 1024L * 1024L * 1024L
         private const val MAX_TOTAL_BYTES = 4L * 1024L * 1024L * 1024L
         private const val MINIMUM_FREE_BYTES = 64L * 1024L * 1024L
+        private const val ATOMIC_TEMPORARY_PREFIX = ".fate-cafe-install-"
+        private val ATOMIC_TEMPORARY_PREFIXES = listOf(
+            ATOMIC_TEMPORARY_PREFIX,
+            ".barista-latte-install-",
+        )
+        private const val ATOMIC_TEMPORARY_SUFFIX = ".partial"
         private val SHA_256 = Regex("[0-9a-f]{64}")
         private val LEGACY_TRANSACTION = Regex(
             Regex.escape(decodeTechnical("LnRyYW5zbGF0ZWZnby10eG4t")) +

@@ -222,6 +222,54 @@ class TransactionalFileEngineTest {
         assertEquals(setOf(EXCEL_DB), baRoot.list()!!.toSet())
     }
 
+    @Test fun `Blue Archive preserves original database when atomic staging has no space`() {
+        val original = "original-database".toByteArray()
+        val translated = "translated-database".toByteArray()
+        val target = File(baRoot, EXCEL_DB).apply { writeBytes(original) }
+        engine = engine(usableSpace = MINIMUM_FREE_BYTES + translated.size - 1L)
+
+        val error = assertThrows(InstallEngineException::class.java) {
+            install(PrivilegedProfiles.BA, EXCEL_DB, translated)
+        }
+
+        assertEquals(InstallError.INSUFFICIENT_STORAGE, error.error)
+        assertArrayEquals(original, target.readBytes())
+        assertEquals(setOf(EXCEL_DB), baRoot.list()!!.toSet())
+    }
+
+    @Test fun `probe removes only the exact interrupted atomic staging file`() {
+        val interrupted = File(baRoot, ".fate-cafe-install-ExcelDB.db.partial")
+            .apply { writeText("partial") }
+        val legacyInterrupted = File(baRoot, ".barista-latte-install-ExcelDB.db.partial")
+            .apply { writeText("legacy-partial") }
+        val unrelated = File(baRoot, ".barista-latte-install-outro.db.partial")
+            .apply { writeText("keep") }
+
+        engine.probe(PrivilegedProfiles.BA, 0)
+
+        assertFalse(interrupted.exists())
+        assertFalse(legacyInterrupted.exists())
+        assertTrue(unrelated.exists())
+    }
+
+    @Test fun `Blue Archive rejects a staging symlink without touching either database`() {
+        val original = "original-database".toByteArray()
+        val outside = temporaryFolder.newFile("outside.db").apply { writeText("outside") }
+        val target = File(baRoot, EXCEL_DB).apply { writeBytes(original) }
+        Files.createSymbolicLink(
+            File(baRoot, ".fate-cafe-install-ExcelDB.db.partial").toPath(),
+            outside.toPath(),
+        )
+
+        val error = assertThrows(InstallEngineException::class.java) {
+            install(PrivilegedProfiles.BA, EXCEL_DB, "translated".toByteArray())
+        }
+
+        assertEquals(InstallError.TARGET_UNSAFE, error.error)
+        assertArrayEquals(original, target.readBytes())
+        assertEquals("outside", outside.readText())
+    }
+
     @Test fun `Blue Archive rejects missing database and other file names`() {
         val missing = assertThrows(InstallEngineException::class.java) {
             install(PrivilegedProfiles.BA, EXCEL_DB, "translated".toByteArray())
@@ -266,6 +314,7 @@ class TransactionalFileEngineTest {
         const val BIN = "translation.bin"
         const val SPECIAL = "cfb1d36393fd67385e046b084b7cf7ed"
         const val EXCEL_DB = "ExcelDB.db"
+        const val MINIMUM_FREE_BYTES = 64L * 1024L * 1024L
         val NO_PROGRESS = InstallProgress { _, _, _, _ -> }
     }
 }

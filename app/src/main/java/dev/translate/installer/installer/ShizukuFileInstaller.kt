@@ -224,8 +224,8 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
     )
 
     private companion object {
-        const val USER_SERVICE_TAG = "barista-latte-v4"
-        const val USER_SERVICE_VERSION = 4
+        const val USER_SERVICE_TAG = "fate-cafe-v5"
+        const val USER_SERVICE_VERSION = 5
         const val BIND_TIMEOUT_MS = 15_000L
         const val MAX_FILES = 4_094
         const val MAX_HASHES_PER_NAME = 2

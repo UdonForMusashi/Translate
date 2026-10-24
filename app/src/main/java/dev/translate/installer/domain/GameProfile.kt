@@ -32,7 +32,7 @@ enum class GameProfile(
         packageName = "com.nexon.bluearchive",
         destinationRelativeDirectory = "files/PUB/Resource/Preload/TableBundles/",
         contentPolicy = ProfileContentPolicy.BLUE_ARCHIVE_DATABASE,
-        isUserSelectable = false,
+        isUserSelectable = true,
     );
 
     companion object {

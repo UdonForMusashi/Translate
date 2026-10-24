@@ -23,7 +23,7 @@ val CafeMuted = Color(0xFFA99B8F)
 val CafeRose = Color(0xFFC98A86)
 val CafeSage = Color(0xFF9CAA8B)
 
-private val BaristaColors = darkColorScheme(
+private val FateCafeColors = darkColorScheme(
     primary = LatteGold,
     onPrimary = Color(0xFF321F10),
     primaryContainer = Color(0xFF4B3523),
@@ -46,7 +46,7 @@ private val BaristaColors = darkColorScheme(
     onError = Color(0xFF690005),
 )
 
-private val BaristaTypography = Typography(
+private val FateCafeTypography = Typography(
     displaySmall = TextStyle(
         fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Bold,
@@ -95,10 +95,10 @@ private val BaristaTypography = Typography(
 )
 
 @Composable
-fun BaristaLatteTheme(content: @Composable () -> Unit) {
+fun FateCafeTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = BaristaColors,
-        typography = BaristaTypography,
+        colorScheme = FateCafeColors,
+        typography = FateCafeTypography,
         content = content,
     )
 }

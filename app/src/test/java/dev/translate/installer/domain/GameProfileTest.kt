@@ -24,7 +24,7 @@ class GameProfileTest {
         )
         assertEquals(true, GameProfile.JP.isUserSelectable)
         assertEquals(true, GameProfile.NA.isUserSelectable)
-        assertEquals(false, GameProfile.BA.isUserSelectable)
+        assertEquals(true, GameProfile.BA.isUserSelectable)
         assertNull(GameProfile.fromId("../../outro"))
     }
 }

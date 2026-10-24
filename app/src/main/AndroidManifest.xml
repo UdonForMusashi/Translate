@@ -10,7 +10,7 @@
         android:icon="@drawable/ic_launcher_foreground"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.BaristaLatte"
+        android:theme="@style/Theme.FateCafe"
         android:usesCleartextTraffic="false">
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
