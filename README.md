@@ -30,11 +30,14 @@ os termos usados na versão Global. A cobertura atual do projeto é:
 - **Prólogo:** completo.
 - **Volume 1 — Foreclosure Task Force:** capítulos 1, 2 e 3 completos, com 20,
   20 e 43 episódios, respectivamente.
-- **Volume 2 — Clockwork Flower Pavane:** capítulo 1 completo, com 20 episódios.
-- **Volume 3 — Eden Treaty:** capítulos 1, 2 e 3 completos, com 17, 20 e 25
-  episódios, respectivamente.
-- **Volume 4 — Rabbit of Caerbannog:** capítulo 1 em andamento; episódios 1–10
-  traduzidos.
+- **Volume 2 — Clockwork Flower Pavane:** capítulos 1 e 2 traduzidos, com 20 e
+  25 episódios, respectivamente. No capítulo 2, os episódios 1–10 também já
+  receberam uma segunda revisão editorial.
+- **Volume 3 — Eden Treaty:** capítulos 1, 2, 3 e 4 completos, com 17, 20, 25 e
+  27 episódios, respectivamente. O capítulo 4 recebeu uma segunda revisão
+  editorial integral.
+- **Volume 4 — Rabbit of Caerbannog:** capítulo 1 completo, com 20 episódios
+  traduzidos e revisados diretamente do coreano.
 
 ## Tradução de Fate/Grand Order
 
