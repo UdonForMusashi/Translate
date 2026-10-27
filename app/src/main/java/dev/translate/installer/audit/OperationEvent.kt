@@ -65,6 +65,26 @@ data class OperationEvent(
     val failureCode: String? = null,
 )
 
+internal fun appendVisibleEvent(
+    events: List<OperationEvent>,
+    event: OperationEvent,
+    maximum: Int,
+): List<OperationEvent> {
+    require(maximum > 0)
+    val previous = events.lastOrNull()
+    val replacesLiveProgress = event.status == OperationStatus.PROGRESS &&
+        previous?.status == OperationStatus.PROGRESS &&
+        previous.transactionId == event.transactionId &&
+        previous.phase == event.phase &&
+        previous.messageCode == event.messageCode
+    val updated = if (replacesLiveProgress) {
+        events.dropLast(1) + event
+    } else {
+        events + event
+    }
+    return updated.takeLast(maximum)
+}
+
 fun interface OperationEventSink {
     fun emit(event: OperationEvent)
 }

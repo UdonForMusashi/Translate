@@ -681,7 +681,7 @@ private fun InstallerScreen(
                         }
                     }
                     state.installationReceipt?.let { receipt ->
-                        if (receipt.status == ReceiptStatus.PENDING) {
+                        if (receipt.status == ReceiptStatus.PENDING && !state.isWorking) {
                             Text(
                                 "Uma instalação anterior pode ter sido interrompida. Por segurança, desinstale os arquivos reconhecidos antes de tentar instalar novamente.",
                                 style = MaterialTheme.typography.bodySmall,

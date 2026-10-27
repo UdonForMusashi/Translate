@@ -10,6 +10,7 @@ import dev.translate.installer.audit.OperationEventSink
 import dev.translate.installer.audit.OperationPhase
 import dev.translate.installer.audit.OperationStatus
 import dev.translate.installer.audit.TransactionEventEmitter
+import dev.translate.installer.audit.appendVisibleEvent
 import dev.translate.installer.data.importer.BundleStager
 import dev.translate.installer.data.remote.GitHubReleaseClient
 import dev.translate.installer.data.remote.RemoteImportedBundle
@@ -669,7 +670,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 progress = eventProgress ?: previous.progress.takeIf {
                     previous.currentPhase == event.phase
                 },
-                events = (previous.events + event).takeLast(MAX_VISIBLE_EVENTS),
+                events = appendVisibleEvent(previous.events, event, MAX_VISIBLE_EVENTS),
             )
         }
     }
