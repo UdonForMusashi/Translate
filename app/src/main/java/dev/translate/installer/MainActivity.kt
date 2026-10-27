@@ -1,6 +1,10 @@
 package dev.translate.installer
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -61,6 +65,7 @@ import dev.translate.installer.audit.OperationEvent
 import dev.translate.installer.audit.OperationPhase
 import dev.translate.installer.audit.OperationStatus
 import dev.translate.installer.domain.GameProfile
+import dev.translate.installer.installer.InstallationAccessMode
 import dev.translate.installer.installer.ReceiptStatus
 import dev.translate.installer.security.BundleFailureCode
 import dev.translate.installer.shizuku.ShizukuGateState
@@ -83,17 +88,22 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private lateinit var model: ImportViewModel
+    private lateinit var legacyStoragePermissionLauncher: ActivityResultLauncher<String>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         model = ViewModelProvider(this)[ImportViewModel::class.java]
+        legacyStoragePermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+            model::updateLegacyStoragePermission,
+        )
         setContent {
             FateCafeTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val state by model.state.collectAsState()
                     FateCafeApp(
                         state = state,
-                        onVerifyShizuku = model::verifyShizuku,
+                        onVerifyAccess = ::verifyInstallationAccess,
                         onProfileSelected = model::selectProfile,
                         onClearProfileSelection = model::clearProfileSelection,
                         onResetCompletedInstallation = model::resetCompletedInstallationUi,
@@ -111,7 +121,22 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::model.isInitialized) {
-            model.revalidateShizuku()
+            when (model.state.value.accessMode) {
+                InstallationAccessMode.LEGACY_DIRECT -> model.updateLegacyStoragePermission(
+                    checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+                        PackageManager.PERMISSION_GRANTED,
+                )
+                InstallationAccessMode.SHIZUKU -> model.revalidateShizuku()
+            }
+        }
+    }
+
+    private fun verifyInstallationAccess() {
+        when (model.state.value.accessMode) {
+            InstallationAccessMode.LEGACY_DIRECT -> legacyStoragePermissionLauncher.launch(
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            )
+            InstallationAccessMode.SHIZUKU -> model.verifyShizuku()
         }
     }
 }
@@ -129,7 +154,7 @@ private data class InstallerPresentation(
 
 private val FATE_GRAND_ORDER_PRESENTATION = InstallerPresentation(
     title = "Fate/Grand Order",
-    introduction = "Conecte o Shizuku, escolha sua região e baixe a tradução mais recente.",
+    introduction = "Autorize o acesso, escolha sua região e baixe a tradução mais recente.",
     profileSectionTitle = "Região do jogo",
     profiles = listOf(GameProfile.JP, GameProfile.NA),
     installationDescription =
@@ -141,7 +166,7 @@ private val FATE_GRAND_ORDER_PRESENTATION = InstallerPresentation(
 private val BLUE_ARCHIVE_PRESENTATION = InstallerPresentation(
     title = "Blue Archive",
     introduction =
-        "Conecte o Shizuku e baixe a tradução PT-BR mais recente do servidor Global.",
+        "Autorize o acesso e baixe a tradução PT-BR mais recente do servidor Global.",
     profileSectionTitle = "Servidor do jogo",
     profiles = listOf(GameProfile.BA),
     installationDescription =
@@ -152,7 +177,7 @@ private val BLUE_ARCHIVE_PRESENTATION = InstallerPresentation(
 @Composable
 private fun FateCafeApp(
     state: ImportUiState,
-    onVerifyShizuku: () -> Unit,
+    onVerifyAccess: () -> Unit,
     onProfileSelected: (GameProfile) -> Unit,
     onClearProfileSelection: () -> Unit,
     onResetCompletedInstallation: () -> Unit,
@@ -179,7 +204,7 @@ private fun FateCafeApp(
                     destination = null
                 }
             },
-            onVerifyShizuku = onVerifyShizuku,
+            onVerifyAccess = onVerifyAccess,
             onProfileSelected = onProfileSelected,
             onResetCompletedInstallation = onResetCompletedInstallation,
             onDownloadLatest = onDownloadLatest,
@@ -409,7 +434,7 @@ private fun InstallerScreen(
     state: ImportUiState,
     presentation: InstallerPresentation,
     onBackToCatalog: () -> Unit,
-    onVerifyShizuku: () -> Unit,
+    onVerifyAccess: () -> Unit,
     onProfileSelected: (GameProfile) -> Unit,
     onResetCompletedInstallation: () -> Unit,
     onDownloadLatest: () -> Unit,
@@ -489,16 +514,31 @@ private fun InstallerScreen(
                 }
             }
 
-            SectionCard(title = "Conexão com Shizuku", step = "01") {
-                Text(
-                    "O Shizuku é um aplicativo separado: o usuário precisa baixá-lo, iniciá-lo e autorizar este instalador.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                ShizukuGateContent(
-                    gate = state.shizukuGate,
-                    isWorking = state.isWorking,
-                    onVerify = onVerifyShizuku,
-                )
+            SectionCard(
+                title = if (state.accessMode == InstallationAccessMode.LEGACY_DIRECT) {
+                    "Acesso aos arquivos"
+                } else {
+                    "Conexão com Shizuku"
+                },
+                step = "01",
+            ) {
+                if (state.accessMode == InstallationAccessMode.LEGACY_DIRECT) {
+                    LegacyDirectAccessContent(
+                        permissionGranted = state.legacyStoragePermissionGranted,
+                        isWorking = state.isWorking,
+                        onVerify = onVerifyAccess,
+                    )
+                } else {
+                    Text(
+                        "O Shizuku é um aplicativo separado: o usuário precisa baixá-lo, iniciá-lo e autorizar este instalador.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    ShizukuGateContent(
+                        gate = state.shizukuGate,
+                        isWorking = state.isWorking,
+                        onVerify = onVerifyAccess,
+                    )
+                }
             }
 
             SectionCard(title = presentation.profileSectionTitle, step = "02") {
@@ -507,14 +547,18 @@ private fun InstallerScreen(
                         RegionOption(
                             profile = profile,
                             selected = state.selectedProfile == profile,
-                            enabled = state.shizukuGate.isApproved && !state.isWorking,
+                            enabled = state.installationAccessApproved && !state.isWorking,
                             onSelected = { onProfileSelected(profile) },
                         )
                     }
                 }
-                if (!state.shizukuGate.isApproved) {
+                if (!state.installationAccessApproved) {
                     Text(
-                        text = "Verifique e autorize o Shizuku para liberar esta etapa.",
+                        text = if (state.accessMode == InstallationAccessMode.LEGACY_DIRECT) {
+                            "Autorize o acesso aos arquivos para liberar esta etapa."
+                        } else {
+                            "Verifique e autorize o Shizuku para liberar esta etapa."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -523,7 +567,7 @@ private fun InstallerScreen(
             SectionCard(title = "Pacote oficial", step = "03") {
                 Button(
                     onClick = onDownloadLatest,
-                    enabled = state.shizukuGate.isApproved &&
+                    enabled = state.installationAccessApproved &&
                         selectedProfileBelongsToGame &&
                         !state.isWorking,
                     modifier = Modifier.fillMaxWidth(),
@@ -627,7 +671,7 @@ private fun InstallerScreen(
                         )
                         Button(
                             onClick = onInstall,
-                            enabled = state.shizukuGate.isApproved &&
+                            enabled = state.installationAccessApproved &&
                                 state.installerCapabilities?.available == true &&
                                 state.gameClosedConfirmed && !state.isWorking &&
                                 state.installationReceipt?.status != ReceiptStatus.PENDING,
@@ -652,7 +696,7 @@ private fun InstallerScreen(
                         )
                         OutlinedButton(
                             onClick = onUninstall,
-                            enabled = state.shizukuGate.isApproved && !state.isWorking,
+                            enabled = state.installationAccessApproved && !state.isWorking,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text("Desinstalar tradução")
@@ -686,7 +730,11 @@ private fun InstallerScreen(
             }
 
             Text(
-                text = "Fate Café • O Shizuku deve permanecer iniciado e autorizado durante toda a operação.",
+                text = if (state.accessMode == InstallationAccessMode.LEGACY_DIRECT) {
+                    "Fate Café • Modo compatível com Android 7, 8 e 9, sem Shizuku."
+                } else {
+                    "Fate Café • O Shizuku deve permanecer iniciado e autorizado durante toda a operação."
+                },
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodySmall,
@@ -769,6 +817,38 @@ private fun RegionOption(
             )
         }
     }
+}
+
+@Composable
+private fun LegacyDirectAccessContent(
+    permissionGranted: Boolean,
+    isWorking: Boolean,
+    onVerify: () -> Unit,
+) {
+    Text(
+        text = if (permissionGranted) {
+            "Android antigo detectado. O acesso direto está autorizado e o Shizuku não é necessário."
+        } else {
+            "Android 7, 8 ou 9 detectado. Autorize o acesso ao armazenamento para instalar sem Shizuku."
+        },
+        color = if (permissionGranted) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        fontWeight = FontWeight.SemiBold,
+    )
+    Button(
+        onClick = onVerify,
+        enabled = !permissionGranted && !isWorking,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (permissionGranted) "Acesso autorizado" else "Autorizar acesso aos arquivos")
+    }
+    Text(
+        text = "Esta autorização é usada somente para acessar os arquivos dos jogos durante a instalação ou desinstalação.",
+        style = MaterialTheme.typography.bodySmall,
+    )
 }
 
 @Composable
@@ -922,7 +1002,7 @@ private fun eventMessage(code: MessageCode): String = when (code) {
     MessageCode.FILE_EXTRACTION_PROGRESS -> "Extraindo e calculando SHA-256"
     MessageCode.FILE_EXTRACTION_SUCCEEDED -> "Extração e hashes concluídos"
     MessageCode.BUNDLE_READY -> "Pacote pronto para o pré-check de instalação"
-    MessageCode.PRIVILEGED_PROBE_STARTED -> "Testando acesso pelo serviço Shizuku"
+    MessageCode.PRIVILEGED_PROBE_STARTED -> "Testando acesso ao diretório do jogo"
     MessageCode.PRIVILEGED_PROBE_SUCCEEDED -> "Diretório do jogo acessível"
     MessageCode.COMMIT_PROGRESS -> "Substituindo e verificando arquivo"
     MessageCode.INSTALLATION_SUCCEEDED -> "Instalação e verificação concluídas"
@@ -1002,10 +1082,12 @@ private fun installerFailureMessage(code: String): String = when (code) {
     "GAME_DIRECTORY_NOT_FOUND" ->
         "O diretório do jogo selecionado não foi encontrado. Abra o jogo ao menos uma vez e confirme o perfil escolhido."
     "GAME_DIRECTORY_NOT_WRITABLE" ->
-        "A identidade atual do Shizuku não consegue escrever no diretório do jogo. Este aparelho pode exigir root/Sui."
+        "O aplicativo não consegue escrever no diretório do jogo. Confira a autorização de acesso; em versões modernas do Android, o aparelho pode exigir root/Sui."
     "UNSAFE_GAME_DIRECTORY", "EXTRACTED_SOURCE_UNSAFE" ->
         "Um caminho ou link inseguro foi detectado; a instalação foi bloqueada."
     "SHIZUKU_PERMISSION_DENIED" -> "A autorização do Shizuku foi revogada."
+    "LEGACY_STORAGE_PERMISSION_DENIED" ->
+        "A permissão de armazenamento foi revogada. Autorize o acesso novamente."
     "SERVICE_BIND_FAILED", "SERVICE_DISCONNECTED" ->
         "O serviço Shizuku desconectou. Inicie-o novamente e refaça a verificação."
     "FILE_SIZE_MISMATCH", "FILE_HASH_MISMATCH" ->
@@ -1020,6 +1102,8 @@ private fun installerFailureMessage(code: String): String = when (code) {
         "O recibo privado de instalação é inválido; a exclusão foi bloqueada por segurança."
     "RECEIPT_WRITE_FAILED" ->
         "Não foi possível salvar o recibo privado antes da instalação; nenhum arquivo deve ser alterado."
+    "RECEIPT_FINALIZE_FAILED" ->
+        "Os arquivos foram instalados, mas não foi possível finalizar o recibo privado. Não abra o jogo ainda: desinstale a tradução e tente novamente."
     "RECEIPT_DELETE_FAILED" ->
         "Os arquivos foram removidos, mas não foi possível apagar o recibo privado. Tente desinstalar novamente."
     "CACHE_CLEAR_FAILED" ->

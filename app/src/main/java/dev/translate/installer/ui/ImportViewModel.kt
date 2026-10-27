@@ -1,6 +1,7 @@
 package dev.translate.installer.ui
 
 import android.app.Application
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.translate.installer.audit.MessageCode
@@ -16,12 +17,16 @@ import dev.translate.installer.data.remote.RemoteBundleImporter
 import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.installer.InstallationReceipt
 import dev.translate.installer.installer.InstallationReceiptStore
+import dev.translate.installer.installer.DirectFileInstaller
+import dev.translate.installer.installer.FileInstaller
+import dev.translate.installer.installer.InstallationAccessMode
 import dev.translate.installer.installer.InstallerCapabilities
 import dev.translate.installer.installer.InstallerException
 import dev.translate.installer.installer.InstallerPhase
 import dev.translate.installer.installer.InstallerProgress
 import dev.translate.installer.installer.ReceiptStatus
 import dev.translate.installer.installer.ReceiptStoreException
+import dev.translate.installer.installer.LegacyDirectAccessPolicy
 import dev.translate.installer.installer.ShizukuFileInstaller
 import dev.translate.installer.security.BundleFailureCode
 import dev.translate.installer.security.BundleValidationException
@@ -41,6 +46,8 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 data class ImportUiState(
+    val accessMode: InstallationAccessMode = InstallationAccessMode.SHIZUKU,
+    val legacyStoragePermissionGranted: Boolean = false,
     val shizukuGate: ShizukuGateState = ShizukuGateState(),
     val selectedProfile: GameProfile? = null,
     val isWorking: Boolean = false,
@@ -54,10 +61,17 @@ data class ImportUiState(
     val gameClosedConfirmed: Boolean = false,
     val isInstalled: Boolean = false,
     val installationReceipt: InstallationReceipt? = null,
-)
+) {
+    val installationAccessApproved: Boolean
+        get() = when (accessMode) {
+            InstallationAccessMode.LEGACY_DIRECT -> legacyStoragePermissionGranted
+            InstallationAccessMode.SHIZUKU -> shizukuGate.isApproved
+        }
+}
 
 class ImportViewModel(application: Application) : AndroidViewModel(application) {
-    private val _state = MutableStateFlow(ImportUiState())
+    private val accessMode = LegacyDirectAccessPolicy.modeFor(Build.VERSION.SDK_INT)
+    private val _state = MutableStateFlow(ImportUiState(accessMode = accessMode))
     val state: StateFlow<ImportUiState> = _state.asStateFlow()
 
     private val bundleStager = BundleStager(
@@ -67,7 +81,10 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         ),
     )
     private val remoteImporter = RemoteBundleImporter(GitHubReleaseClient(), bundleStager)
-    private val fileInstaller = ShizukuFileInstaller(application)
+    private val fileInstaller: FileInstaller = when (accessMode) {
+        InstallationAccessMode.LEGACY_DIRECT -> DirectFileInstaller(application)
+        InstallationAccessMode.SHIZUKU -> ShizukuFileInstaller(application)
+    }
     private val receiptStore = InstallationReceiptStore(application)
     private var importJob: Job? = null
     private val shizukuGateController = ShizukuGateController(
@@ -76,16 +93,46 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     init {
-        shizukuGateController.start()
+        if (accessMode == InstallationAccessMode.SHIZUKU) {
+            shizukuGateController.start()
+        }
     }
 
     fun verifyShizuku() {
-        if (_state.value.isWorking) return
+        if (accessMode != InstallationAccessMode.SHIZUKU || _state.value.isWorking) return
         shizukuGateController.verifyOrRequestPermission()
     }
 
     fun revalidateShizuku() {
+        if (accessMode != InstallationAccessMode.SHIZUKU) return
         shizukuGateController.revalidateAfterForeground()
+    }
+
+    fun updateLegacyStoragePermission(granted: Boolean) {
+        if (accessMode != InstallationAccessMode.LEGACY_DIRECT) return
+        val approvalWasLost = _state.value.legacyStoragePermissionGranted && !granted
+        if (!granted) importJob?.cancel()
+        _state.update { previous ->
+            if (granted) {
+                previous.copy(legacyStoragePermissionGranted = true)
+            } else {
+                previous.copy(
+                    legacyStoragePermissionGranted = false,
+                    selectedProfile = null,
+                    isWorking = false,
+                    currentPhase = null,
+                    progress = null,
+                    importedBundle = null,
+                    failureCode = null,
+                    installerCapabilities = null,
+                    installerFailureCode = null,
+                    gameClosedConfirmed = false,
+                    isInstalled = false,
+                    installationReceipt = null,
+                )
+            }
+        }
+        if (approvalWasLost) clearPrivateStagingAfterAccessLoss()
     }
 
     fun cancelImport() {
@@ -130,7 +177,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectProfile(profile: GameProfile) {
         if (!profile.isUserSelectable || _state.value.isWorking ||
-            !_state.value.shizukuGate.isApproved
+            !_state.value.installationAccessApproved
         ) return
         var receiptInvalid = false
         val receipt = try {
@@ -167,7 +214,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun startBundleDownload() {
         val selectedProfile = _state.value.selectedProfile ?: return
-        if (!selectedProfile.isUserSelectable || !_state.value.shizukuGate.isApproved ||
+        if (!selectedProfile.isUserSelectable || !_state.value.installationAccessApproved ||
             importJob?.isActive == true
         ) return
 
@@ -249,7 +296,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val snapshot = _state.value
         val profile = snapshot.selectedProfile ?: return
         val cachedBundle = snapshot.importedBundle ?: return
-        if (!snapshot.shizukuGate.isApproved || snapshot.isWorking ||
+        if (!snapshot.installationAccessApproved || snapshot.isWorking ||
             snapshot.installerCapabilities?.available != true || !snapshot.gameClosedConfirmed ||
             snapshot.installationReceipt?.status == ReceiptStatus.PENDING
         ) return
@@ -271,6 +318,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         importJob = viewModelScope.launch {
             var readyBundle = cachedBundle
             var pendingReceipt: InstallationReceipt? = null
+            var gameFilesInstalled = false
             try {
                 readyBundle = ensureLatestBundle(profile, readyBundle, emitter)
 
@@ -301,6 +349,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                     bundle = readyBundle.verifiedBundle,
                     progress = { reportInstallerProgress(emitter, it) },
                 )
+                gameFilesInstalled = outcome.installed
                 val installedReceipt = InstallationReceipt.installedUpdate(
                     profile,
                     readyBundle.verifiedBundle.manifest,
@@ -369,7 +418,11 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             } catch (_: ReceiptStoreException) {
                 installationFailed(
                     emitter,
-                    "RECEIPT_WRITE_FAILED",
+                    if (gameFilesInstalled) {
+                        "RECEIPT_FINALIZE_FAILED"
+                    } else {
+                        "RECEIPT_WRITE_FAILED"
+                    },
                     pendingReceipt ?: InstallationReceipt.pendingUpdate(
                         profile,
                         readyBundle.verifiedBundle.manifest,
@@ -493,7 +546,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         val snapshot = _state.value
         val profile = snapshot.selectedProfile ?: return
         val receipt = snapshot.installationReceipt ?: return
-        if (receipt.profile != profile || !snapshot.shizukuGate.isApproved ||
+        if (receipt.profile != profile || !snapshot.installationAccessApproved ||
             snapshot.isWorking
         ) return
 
@@ -622,6 +675,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun onShizukuGateChanged(gate: ShizukuGateState) {
+        if (accessMode != InstallationAccessMode.SHIZUKU) return
         val approvalWasLost = _state.value.shizukuGate.isApproved && !gate.isApproved
         if (!gate.isApproved) importJob?.cancel()
         _state.update { previous ->
@@ -644,18 +698,22 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
         }
-        if (approvalWasLost) {
-            viewModelScope.launch {
-                try {
-                    bundleStager.clearPrivateStaging()
-                } catch (_: BundleValidationException) {
-                }
+        if (approvalWasLost) clearPrivateStagingAfterAccessLoss()
+    }
+
+    private fun clearPrivateStagingAfterAccessLoss() {
+        viewModelScope.launch {
+            try {
+                bundleStager.clearPrivateStaging()
+            } catch (_: BundleValidationException) {
             }
         }
     }
 
     override fun onCleared() {
-        shizukuGateController.stop()
+        if (accessMode == InstallationAccessMode.SHIZUKU) {
+            shizukuGateController.stop()
+        }
         super.onCleared()
     }
 

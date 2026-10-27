@@ -17,6 +17,8 @@ import dev.translate.installer.security.VerifiedBundle
 import dev.translate.installer.security.ensureSufficientStorage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -82,6 +84,7 @@ class BundleStager(
             if (!partial.renameTo(archive)) ioFailure()
 
             var lastProgressAtNanos = 0L
+            val operationContext = currentCoroutineContext()
             val verified = verifier.verifyAndExtract(
                 archiveFile = archive,
                 extractionDirectory = extracted,
@@ -101,6 +104,7 @@ class BundleStager(
                         )
                     }
                 },
+                cancellationCheck = { operationContext.ensureActive() },
             )
             events.emit(
                 phase = OperationPhase.EXTRACT,

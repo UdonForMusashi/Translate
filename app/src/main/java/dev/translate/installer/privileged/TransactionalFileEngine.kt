@@ -3,13 +3,13 @@ package dev.translate.installer.privileged
 import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.domain.ProfileContentPolicy
 import dev.translate.installer.domain.decodeTechnical
+import dev.translate.installer.io.moveReplacingCompatible
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
-import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
@@ -129,12 +129,7 @@ internal class TransactionalFileEngine(
             } else if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
                 unsafe()
             }
-            Files.move(
-                temporary.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING,
-            )
+            moveReplacingCompatible(temporary.toPath(), target.toPath())
             verifyTarget(target, record)
         } catch (exception: Exception) {
             deleteManagedTemporary(temporary)
@@ -297,12 +292,15 @@ internal class TransactionalFileEngine(
     private fun targetMatches(file: File, record: PrivilegedInstalledFile): Boolean =
         file.length() == record.size && sha256(file) == record.sha256
 
-    private fun readPosixPermissions(file: File): Set<PosixFilePermission>? =
+    private fun readPosixPermissions(file: File): Set<PosixFilePermission>? = try {
         Files.getFileAttributeView(
             file.toPath(),
             PosixFileAttributeView::class.java,
             LinkOption.NOFOLLOW_LINKS,
         )?.readAttributes()?.permissions()
+    } catch (_: UnsupportedOperationException) {
+        null
+    }
 
     private fun applyPosixPermissions(file: File, permissions: Set<PosixFilePermission>) {
         Files.getFileAttributeView(

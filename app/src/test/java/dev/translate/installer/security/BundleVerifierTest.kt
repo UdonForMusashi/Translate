@@ -1,6 +1,7 @@
 package dev.translate.installer.security
 
 import dev.translate.installer.domain.GameProfile
+import kotlinx.coroutines.CancellationException
 import org.apache.commons.compress.archivers.zip.UnixStat
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream
@@ -116,6 +117,26 @@ class BundleVerifierTest {
             )
         }
         assertEquals(BundleFailureCode.TOO_MANY_ENTRIES, error.code)
+    }
+
+    @Test fun `cancellation interrupts extraction and removes staging`() {
+        val extraction = File(temporaryFolder.root, "cancelled")
+        var checks = 0
+
+        assertThrows(CancellationException::class.java) {
+            verifier().verifyAndExtract(
+                archiveFile = fixture(GameProfile.JP).archive,
+                extractionDirectory = extraction,
+                selectedProfile = GameProfile.JP,
+                cancellationCheck = {
+                    checks++
+                    if (checks >= 7) throw CancellationException("test cancellation")
+                },
+            )
+        }
+
+        assertTrue(checks >= 7)
+        assertFalse(extraction.exists())
     }
 
     private fun verify(f: Fixture, dir: File, profile: GameProfile) =

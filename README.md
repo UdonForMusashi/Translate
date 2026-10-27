@@ -13,9 +13,13 @@ Global.
 É necessário ter conexão com a internet para consultar e baixar a tradução mais
 recente do GitHub.
 
-Também é necessário instalar, iniciar e autorizar o aplicativo **Shizuku**. O
-Fate Café usa a permissão concedida pelo Shizuku para aplicar a tradução nos
-arquivos do jogo.
+O método de acesso depende da versão do Android:
+
+- **Android 7, 8 ou 9:** o Fate Café solicita a permissão de armazenamento do
+  próprio sistema e aplica a tradução sem Shizuku. Isso inclui instâncias do
+  BlueStacks baseadas no Android 7.1.2.
+- **Android 10 ou mais recente:** é necessário instalar, iniciar e autorizar o
+  aplicativo **Shizuku** para que o Fate Café acesse os arquivos do jogo.
 
 ## Tradução de Blue Archive
 

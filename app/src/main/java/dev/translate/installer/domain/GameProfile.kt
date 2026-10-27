@@ -1,6 +1,6 @@
 package dev.translate.installer.domain
 
-import java.util.Base64
+import kotlin.io.encoding.Base64
 
 enum class GameProfile(
     val profileId: String,
@@ -66,4 +66,4 @@ enum class ProfileContentPolicy {
 }
 
 internal fun decodeTechnical(encoded: String): String =
-    String(Base64.getDecoder().decode(encoded), Charsets.UTF_8)
+    String(Base64.Default.decode(encoded), Charsets.UTF_8)

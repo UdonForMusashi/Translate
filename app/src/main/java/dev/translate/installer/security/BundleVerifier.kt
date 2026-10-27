@@ -1,6 +1,7 @@
 package dev.translate.installer.security
 
 import dev.translate.installer.domain.GameProfile
+import kotlinx.coroutines.CancellationException
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipFile
 import org.apache.commons.compress.archivers.zip.ZipMethod
@@ -46,7 +47,9 @@ class BundleVerifier(
         selectedProfile: GameProfile,
         progressSink: ExtractionProgressSink = ExtractionProgressSink { _, _, _ -> },
         noticeSink: VerificationNoticeSink = VerificationNoticeSink { },
+        cancellationCheck: () -> Unit = {},
     ): VerifiedBundle {
+        cancellationCheck()
         if (!archiveFile.isFile) fail(BundleFailureCode.SOURCE_UNAVAILABLE)
         if (archiveFile.length() > limits.maxArchiveBytes) {
             fail(BundleFailureCode.ARCHIVE_TOO_LARGE)
@@ -58,7 +61,7 @@ class BundleVerifier(
 
         try {
             ZipFile.builder().setFile(archiveFile).get().use { zip ->
-                val entries = enumerate(zip)
+                val entries = enumerate(zip, cancellationCheck)
                 val manifestEntry = requiredEntry(entries, "manifest.json")
                 val signatureEntry = requiredEntry(entries, "manifest.sig")
                 validateMetadataEntry(zip, manifestEntry, limits.maxManifestBytes)
@@ -91,7 +94,15 @@ class BundleVerifier(
                 )
                 noticeSink.onNotice(VerificationNotice.INSPECTION_SUCCEEDED)
                 noticeSink.onNotice(VerificationNotice.EXTRACTION_STARTED)
-                extractDeclaredFiles(zip, entries, manifest, extractionDirectory, progressSink)
+                extractDeclaredFiles(
+                    zip,
+                    entries,
+                    manifest,
+                    extractionDirectory,
+                    progressSink,
+                    cancellationCheck,
+                )
+                cancellationCheck()
                 noticeSink.onNotice(VerificationNotice.EXTRACTION_SUCCEEDED)
 
                 return VerifiedBundle(
@@ -100,6 +111,9 @@ class BundleVerifier(
                     extractedDirectory = extractionDirectory,
                 )
             }
+        } catch (exception: CancellationException) {
+            extractionDirectory.deleteRecursively()
+            throw exception
         } catch (exception: BundleValidationException) {
             extractionDirectory.deleteRecursively()
             throw exception
@@ -109,10 +123,14 @@ class BundleVerifier(
         }
     }
 
-    private fun enumerate(zip: ZipFile): Map<String, ZipArchiveEntry> {
+    private fun enumerate(
+        zip: ZipFile,
+        cancellationCheck: () -> Unit,
+    ): Map<String, ZipArchiveEntry> {
         val entries = linkedMapOf<String, ZipArchiveEntry>()
         val enumeration = zip.entries
         while (enumeration.hasMoreElements()) {
+            cancellationCheck()
             if (entries.size >= limits.maxArchiveEntries) {
                 fail(BundleFailureCode.TOO_MANY_ENTRIES)
             }
@@ -208,9 +226,11 @@ class BundleVerifier(
         manifest: LocalBundleManifest,
         extractionDirectory: File,
         progressSink: ExtractionProgressSink,
+        cancellationCheck: () -> Unit,
     ) {
         val canonicalRoot = extractionDirectory.canonicalFile
         manifest.files.forEach { declared ->
+            cancellationCheck()
             val entry = requiredEntry(entries, declared.archiveEntry)
             val destination = File(canonicalRoot, declared.archiveEntry).canonicalFile
             if (!destination.path.startsWith(canonicalRoot.path + File.separator)) {
@@ -228,6 +248,7 @@ class BundleVerifier(
                         val output = BufferedOutputStream(fileOutput)
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         while (true) {
+                            cancellationCheck()
                             val read = input.read(buffer)
                             if (read < 0) break
                             if (read == 0) continue

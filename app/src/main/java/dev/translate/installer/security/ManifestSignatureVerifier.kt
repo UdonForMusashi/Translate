@@ -4,7 +4,7 @@ import java.security.KeyFactory
 import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
-import java.util.Base64
+import kotlin.io.encoding.Base64
 
 fun interface PublicKeyProvider {
     fun find(keyId: String): PublicKey?
@@ -14,7 +14,7 @@ class X509EcPublicKeyProvider(
     encodedKeys: Map<String, String>,
 ) : PublicKeyProvider {
     private val keys: Map<String, PublicKey> = encodedKeys.mapValues { (_, encoded) ->
-        val der = Base64.getDecoder().decode(encoded.filterNot(Char::isWhitespace))
+        val der = Base64.Default.decode(encoded.filterNot(Char::isWhitespace))
         KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(der))
     }
 

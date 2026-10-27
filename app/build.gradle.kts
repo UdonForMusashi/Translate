@@ -9,10 +9,10 @@ android {
 
     defaultConfig {
         applicationId = "dev.translate.installer"
-        minSdk = 26
+        minSdk = 24
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 7
+        versionName = "0.6.0"
 
     }
 
@@ -28,6 +28,7 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -51,6 +52,8 @@ android {
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
+
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.13.0")

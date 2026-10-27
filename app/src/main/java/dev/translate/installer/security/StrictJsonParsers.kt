@@ -6,7 +6,7 @@ import com.google.gson.stream.JsonToken
 import java.io.ByteArrayInputStream
 import java.io.InputStreamReader
 import java.nio.charset.StandardCharsets
-import java.util.Base64
+import kotlin.io.encoding.Base64
 
 class StrictJsonParsers {
     fun parseSignatureEnvelope(bytes: ByteArray): SignatureEnvelope = parse(bytes) { reader ->
@@ -23,7 +23,7 @@ class StrictJsonParsers {
                 "signature" -> {
                     val encoded = reader.readLimitedString(256)
                     signature = try {
-                        Base64.getDecoder().decode(encoded)
+                        Base64.Default.decode(encoded)
                     } catch (exception: IllegalArgumentException) {
                         fail(BundleFailureCode.SIGNATURE_ENVELOPE_INVALID, exception)
                     }

@@ -1,9 +1,9 @@
 package dev.translate.installer.installer
 
 import android.content.Context
-import android.system.Os
-import android.system.OsConstants
+import android.util.AtomicFile
 import dev.translate.installer.domain.GameProfile
+import dev.translate.installer.io.moveReplacingCompatible
 import dev.translate.installer.security.LocalBundleManifest
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -14,7 +14,6 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 
 enum class ReceiptStatus { PENDING, INSTALLED }
 
@@ -78,14 +77,14 @@ class ReceiptStoreException(cause: Throwable? = null) : IOException("RECEIPT_INV
 
 class InstallationReceiptStore private constructor(
     private val root: File,
-    private val directorySync: (File) -> Unit,
+    private val atomicFiles: ReceiptAtomicFiles,
 ) {
     constructor(context: Context) : this(
         File(context.filesDir, RECEIPT_DIRECTORY),
-        ::syncDirectory,
+        AndroidReceiptAtomicFiles,
     )
 
-    internal constructor(root: File, testOnly: Boolean) : this(root, directorySync = {}) {
+    internal constructor(root: File, testOnly: Boolean) : this(root, PortableReceiptAtomicFiles) {
         check(testOnly)
     }
 
@@ -93,12 +92,16 @@ class InstallationReceiptStore private constructor(
     fun load(profile: GameProfile): InstallationReceipt? {
         ensureRoot()
         val file = receiptFile(profile)
-        if (!file.exists()) return null
-        if (!file.isFile || Files.isSymbolicLink(file.toPath()) || file.length() !in 1..MAX_RECEIPT_BYTES) {
-            throw ReceiptStoreException()
+        val fileInput = try {
+            atomicFiles.openRead(file) ?: return null
+        } catch (exception: Exception) {
+            throw ReceiptStoreException(exception)
         }
         return try {
-            DataInputStream(BufferedInputStream(FileInputStream(file))).use { input ->
+            if (!file.isFile || Files.isSymbolicLink(file.toPath()) ||
+                file.length() !in 1..MAX_RECEIPT_BYTES
+            ) invalid()
+            DataInputStream(BufferedInputStream(fileInput)).use { input ->
                 if (input.readInt() != MAGIC || input.readInt() != FORMAT_VERSION) invalid()
                 val storedProfile = GameProfile.fromId(input.readUTF()) ?: invalid()
                 if (storedProfile != profile) invalid()
@@ -132,7 +135,7 @@ class InstallationReceiptStore private constructor(
         val partial = partialFile(receipt.profile)
         if (partial.exists() && !partial.delete()) throw ReceiptStoreException()
         try {
-            FileOutputStream(partial).use { fileOutput ->
+            atomicFiles.write(destination) { fileOutput ->
                 val buffered = BufferedOutputStream(fileOutput)
                 val output = DataOutputStream(buffered)
                 output.writeInt(MAGIC)
@@ -149,8 +152,7 @@ class InstallationReceiptStore private constructor(
                 output.flush()
                 fileOutput.fd.sync()
             }
-            moveReplacing(partial, destination)
-            directorySync(root)
+            if (load(receipt.profile) != receipt) invalid()
         } catch (exception: Exception) {
             partial.delete()
             throw ReceiptStoreException(exception)
@@ -160,16 +162,23 @@ class InstallationReceiptStore private constructor(
     @Synchronized
     fun delete(profile: GameProfile) {
         ensureRoot()
-        var deleted = false
-        listOf(receiptFile(profile), partialFile(profile)).forEach { file ->
-            if (file.exists()) {
-                if (!file.isFile || Files.isSymbolicLink(file.toPath()) || !file.delete()) {
-                    throw ReceiptStoreException()
-                }
-                deleted = true
+        val destination = receiptFile(profile)
+        val partial = partialFile(profile)
+        try {
+            if (destination.exists() &&
+                (!destination.isFile || Files.isSymbolicLink(destination.toPath()))
+            ) invalid()
+            atomicFiles.delete(destination)
+            if (partial.exists() &&
+                (!partial.isFile || Files.isSymbolicLink(partial.toPath()) || !partial.delete())
+            ) {
+                invalid()
             }
+        } catch (exception: ReceiptStoreException) {
+            throw exception
+        } catch (exception: Exception) {
+            throw ReceiptStoreException(exception)
         }
-        if (deleted) directorySync(root)
     }
 
     private fun validate(receipt: InstallationReceipt) {
@@ -194,11 +203,8 @@ class InstallationReceiptStore private constructor(
     private fun ensureRoot() {
         if (!root.exists()) {
             if (!root.mkdirs()) throw ReceiptStoreException()
-            root.parentFile?.let(directorySync)
         }
-        if (!root.isDirectory || Files.isSymbolicLink(root.toPath()) ||
-            root.canonicalFile != root.absoluteFile
-        ) throw ReceiptStoreException()
+        if (!root.isDirectory || Files.isSymbolicLink(root.toPath())) throw ReceiptStoreException()
     }
 
     private fun receiptFile(profile: GameProfile) = safeChild("receipt-${profile.profileId}.bin")
@@ -208,15 +214,6 @@ class InstallationReceiptStore private constructor(
         val child = File(root, name)
         if (child.canonicalFile.parentFile != root.canonicalFile) invalid()
         return child
-    }
-
-    private fun moveReplacing(source: File, destination: File) {
-        Files.move(
-            source.toPath(),
-            destination.toPath(),
-            StandardCopyOption.ATOMIC_MOVE,
-            StandardCopyOption.REPLACE_EXISTING,
-        )
     }
 
     private fun invalid(): Nothing = throw ReceiptStoreException()
@@ -234,15 +231,70 @@ class InstallationReceiptStore private constructor(
     }
 }
 
-private fun syncDirectory(directory: File) {
-    val descriptor = Os.open(
-        directory.absolutePath,
-        OsConstants.O_RDONLY,
-        0,
-    )
-    try {
-        Os.fsync(descriptor)
-    } finally {
-        Os.close(descriptor)
+private interface ReceiptAtomicFiles {
+    fun openRead(destination: File): FileInputStream?
+    fun write(destination: File, content: (FileOutputStream) -> Unit)
+    fun delete(destination: File)
+}
+
+private object AndroidReceiptAtomicFiles : ReceiptAtomicFiles {
+    override fun openRead(destination: File): FileInputStream? {
+        val atomicFile = AtomicFile(destination)
+        val legacyBackup = File(destination.path + ".bak")
+        return if (destination.exists() || legacyBackup.exists()) {
+            atomicFile.openRead()
+        } else {
+            null
+        }
+    }
+
+    override fun write(destination: File, content: (FileOutputStream) -> Unit) {
+        val atomicFile = AtomicFile(destination)
+        var output: FileOutputStream? = null
+        try {
+            output = atomicFile.startWrite()
+            content(output)
+            atomicFile.finishWrite(output)
+            output = null
+        } catch (exception: Exception) {
+            atomicFile.failWrite(output)
+            throw exception
+        }
+    }
+
+    override fun delete(destination: File) {
+        val atomicFile = AtomicFile(destination)
+        atomicFile.delete()
+        val leftovers = listOf(
+            destination,
+            File(destination.path + ".new"),
+            File(destination.path + ".bak"),
+        )
+        if (leftovers.any(File::exists)) throw IOException("Atomic receipt deletion failed")
+    }
+}
+
+private object PortableReceiptAtomicFiles : ReceiptAtomicFiles {
+    override fun openRead(destination: File): FileInputStream? =
+        destination.takeIf(File::isFile)?.let(::FileInputStream)
+
+    override fun write(destination: File, content: (FileOutputStream) -> Unit) {
+        val temporary = File(destination.path + ".new")
+        if (temporary.exists() && !temporary.delete()) {
+            throw IOException("Temporary receipt deletion failed")
+        }
+        try {
+            FileOutputStream(temporary).use(content)
+            moveReplacingCompatible(temporary.toPath(), destination.toPath())
+        } finally {
+            if (temporary.exists()) temporary.delete()
+        }
+    }
+
+    override fun delete(destination: File) {
+        listOf(destination, File(destination.path + ".new"), File(destination.path + ".bak"))
+            .forEach { file ->
+                if (file.exists() && !file.delete()) throw IOException("Receipt deletion failed")
+            }
     }
 }
