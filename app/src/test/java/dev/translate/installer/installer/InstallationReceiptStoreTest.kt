@@ -26,6 +26,18 @@ class InstallationReceiptStoreTest {
         assertEquals(installed, store.load(GameProfile.NA))
     }
 
+    @Test fun `keeps official and BetterFGO receipts separate`() {
+        val store = store()
+        val official = receipt(GameProfile.NA, ReceiptStatus.INSTALLED)
+        val better = receipt(GameProfile.BETTER_NA, ReceiptStatus.INSTALLED)
+
+        store.save(official)
+        store.save(better)
+
+        assertEquals(official, store.load(GameProfile.NA))
+        assertEquals(better, store.load(GameProfile.BETTER_NA))
+    }
+
     @Test fun `rejects corrupt receipt instead of exposing names for deletion`() {
         val root = temporaryFolder.newFolder("receipts")
         File(root, "receipt-${GameProfile.JP.profileId}.bin").writeText("attacker-controlled")

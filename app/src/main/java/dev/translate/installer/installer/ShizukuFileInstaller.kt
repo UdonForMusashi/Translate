@@ -173,9 +173,11 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
 
     private fun validateBundleProfile(profile: GameProfile, bundle: VerifiedBundle) {
         val manifest = bundle.manifest
-        if (manifest.profile != profile.name || manifest.profileId != profile.profileId ||
-            manifest.packageName != profile.packageName ||
-            manifest.destinationDirectory != profile.destinationRelativeDirectory
+        val bundleProfile = profile.bundleProfile
+        if (manifest.profile != bundleProfile.name ||
+            manifest.profileId != bundleProfile.profileId ||
+            manifest.packageName != bundleProfile.packageName ||
+            manifest.destinationDirectory != bundleProfile.destinationRelativeDirectory
         ) throw InstallerException("PROFILE_MISMATCH")
     }
 
@@ -197,6 +199,8 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
         GameProfile.JP -> 1
         GameProfile.NA -> 2
         GameProfile.BA -> 3
+        GameProfile.BETTER_JP -> 4
+        GameProfile.BETTER_NA -> 5
     }
 
     private fun mapException(exception: Throwable): InstallerException {
@@ -224,8 +228,8 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
     )
 
     private companion object {
-        const val USER_SERVICE_TAG = "fate-cafe-v7"
-        const val USER_SERVICE_VERSION = 7
+        const val USER_SERVICE_TAG = "fate-cafe-v8"
+        const val USER_SERVICE_VERSION = 8
         const val BIND_TIMEOUT_MS = 15_000L
         const val MAX_FILES = 4_094
         const val MAX_HASHES_PER_NAME = 2

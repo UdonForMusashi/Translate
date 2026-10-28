@@ -13,6 +13,7 @@ class ManifestPolicy(
         envelope: SignatureEnvelope,
         selectedProfile: GameProfile,
     ) {
+        val bundleProfile = selectedProfile.bundleProfile
         if (manifest.schemaVersion != SCHEMA_VERSION || envelope.schemaVersion != SCHEMA_VERSION) invalid()
         if (envelope.algorithm != SUPPORTED_ALGORITHM) invalid()
         if (manifest.keyId != envelope.keyId) invalid()
@@ -23,15 +24,15 @@ class ManifestPolicy(
             invalid()
         }
 
-        if (manifest.profile != selectedProfile.name ||
-            manifest.profileId != selectedProfile.profileId
+        if (manifest.profile != bundleProfile.name ||
+            manifest.profileId != bundleProfile.profileId
         ) {
             fail(BundleFailureCode.PROFILE_MISMATCH)
         }
-        if (manifest.packageName != selectedProfile.packageName) {
+        if (manifest.packageName != bundleProfile.packageName) {
             fail(BundleFailureCode.PACKAGE_MISMATCH)
         }
-        if (manifest.destinationDirectory != selectedProfile.destinationRelativeDirectory) {
+        if (manifest.destinationDirectory != bundleProfile.destinationRelativeDirectory) {
             fail(BundleFailureCode.UNSAFE_ENTRY)
         }
 

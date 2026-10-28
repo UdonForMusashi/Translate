@@ -26,6 +26,22 @@ enum class GameProfile(
         contentPolicy = ProfileContentPolicy.FGO_TRANSLATION,
         isUserSelectable = true,
     ),
+    BETTER_JP(
+        profileId = "better-fgo-jp",
+        displayName = "BetterFGO — Japão",
+        packageName = "io.rayshift.betterfgo",
+        destinationRelativeDirectory = "files/data/d713/",
+        contentPolicy = ProfileContentPolicy.FGO_TRANSLATION,
+        isUserSelectable = true,
+    ),
+    BETTER_NA(
+        profileId = "better-fgo-na",
+        displayName = "BetterFGO — América do Norte",
+        packageName = "io.rayshift.betterfgo.en",
+        destinationRelativeDirectory = "files/data/d713/",
+        contentPolicy = ProfileContentPolicy.FGO_TRANSLATION,
+        isUserSelectable = true,
+    ),
     BA(
         profileId = "blue-archive-global",
         displayName = "Blue Archive (Global)",
@@ -34,6 +50,22 @@ enum class GameProfile(
         contentPolicy = ProfileContentPolicy.BLUE_ARCHIVE_DATABASE,
         isUserSelectable = true,
     );
+
+    val bundleProfile: GameProfile
+        get() = when (this) {
+            BETTER_JP -> JP
+            BETTER_NA -> NA
+            else -> this
+        }
+
+    val isBetterFgo: Boolean
+        get() = this == BETTER_JP || this == BETTER_NA
+
+    fun withBetterFgo(enabled: Boolean): GameProfile = when (bundleProfile) {
+        JP -> if (enabled) BETTER_JP else JP
+        NA -> if (enabled) BETTER_NA else NA
+        else -> this
+    }
 
     companion object {
         fun fromId(profileId: String): GameProfile? =

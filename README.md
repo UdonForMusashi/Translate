@@ -28,8 +28,9 @@ substitui o banco de textos do jogo. Abra o Blue Archive e conclua o download
 inicial dos recursos antes de instalar a tradução. Feche completamente o jogo
 durante a instalação.
 
-A tradução foi preparada a partir dos textos originais em coreano, preservando
-os termos usados na versão Global. A cobertura atual do projeto é:
+A tradução foi preparada com o modelo **GPT-5.6-Sol** a partir dos textos
+originais em coreano, preservando os termos usados na versão Global. A
+cobertura atual do projeto é:
 
 - **Prólogo:** completo.
 - **Volume 1 — Foreclosure Task Force:** capítulos 1, 2 e 3 completos, com 20,
@@ -45,6 +46,10 @@ os termos usados na versão Global. A cobertura atual do projeto é:
 
 Todo o conteúdo em português incluído nos pacotes de Fate/Grand Order foi
 traduzido pela comunidade **Fate Café**.
+
+Para cada região, o aplicativo permite escolher se a tradução será instalada
+no Fate/Grand Order oficial ou na pasta independente do cliente BetterFGO. Os
+dois destinos são tratados separadamente pelo instalador e pela desinstalação.
 
 A lista abaixo corresponde ao conteúdo presente nos pacotes atuais. Alguns
 roteiros mais recentes existem somente no servidor JP, enquanto outros já estão
@@ -128,3 +133,9 @@ disponíveis nos dois servidores.
 
 Participe da comunidade **União Fate Café** no Discord:
 [discord.gg/E2UJh7zwzy](https://discord.gg/E2UJh7zwzy)
+
+## Aviso
+
+Não nos responsabilizamos por eventuais banimentos ou outras penalidades
+aplicadas à conta do usuário em decorrência do uso do aplicativo ou das
+traduções.

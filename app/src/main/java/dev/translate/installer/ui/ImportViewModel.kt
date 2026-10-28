@@ -177,9 +177,21 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectProfile(profile: GameProfile) {
+        val keepBetterFgo = _state.value.selectedProfile?.isBetterFgo == true
+        selectInstallationProfile(profile.withBetterFgo(keepBetterFgo))
+    }
+
+    fun setBetterFgoEnabled(enabled: Boolean) {
+        val current = _state.value.selectedProfile ?: return
+        if (current.bundleProfile !in setOf(GameProfile.JP, GameProfile.NA)) return
+        selectInstallationProfile(current.withBetterFgo(enabled))
+    }
+
+    private fun selectInstallationProfile(profile: GameProfile) {
         if (!profile.isUserSelectable || _state.value.isWorking ||
             !_state.value.installationAccessApproved
         ) return
+        if (_state.value.selectedProfile == profile) return
         var receiptInvalid = false
         val receipt = try {
             receiptStore.load(profile)

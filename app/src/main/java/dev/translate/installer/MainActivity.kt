@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
                         state = state,
                         onVerifyAccess = ::verifyInstallationAccess,
                         onProfileSelected = model::selectProfile,
+                        onBetterFgoChanged = model::setBetterFgoEnabled,
                         onClearProfileSelection = model::clearProfileSelection,
                         onResetCompletedInstallation = model::resetCompletedInstallationUi,
                         onDownloadLatest = model::downloadLatestBundle,
@@ -149,6 +150,7 @@ private data class InstallerPresentation(
     val introduction: String,
     val profileSectionTitle: String,
     val profiles: List<GameProfile>,
+    val supportsBetterFgo: Boolean,
     val installationDescription: String,
 )
 
@@ -157,6 +159,7 @@ private val FATE_GRAND_ORDER_PRESENTATION = InstallerPresentation(
     introduction = "Autorize o acesso, escolha sua região e baixe a tradução mais recente.",
     profileSectionTitle = "Região do jogo",
     profiles = listOf(GameProfile.JP, GameProfile.NA),
+    supportsBetterFgo = true,
     installationDescription =
         "A instalação substitui de forma atômica somente os arquivos autenticados do " +
             "Fate/Grand Order. O temporário de gravação é removido ao concluir e nenhum " +
@@ -169,6 +172,7 @@ private val BLUE_ARCHIVE_PRESENTATION = InstallerPresentation(
         "Autorize o acesso e baixe a tradução PT-BR mais recente do servidor Global.",
     profileSectionTitle = "Servidor do jogo",
     profiles = listOf(GameProfile.BA),
+    supportsBetterFgo = false,
     installationDescription =
         "A instalação substitui de forma atômica somente o ExcelDB.db autenticado do " +
             "Blue Archive Global. O temporário de gravação é removido ao concluir.",
@@ -179,6 +183,7 @@ private fun FateCafeApp(
     state: ImportUiState,
     onVerifyAccess: () -> Unit,
     onProfileSelected: (GameProfile) -> Unit,
+    onBetterFgoChanged: (Boolean) -> Unit,
     onClearProfileSelection: () -> Unit,
     onResetCompletedInstallation: () -> Unit,
     onDownloadLatest: () -> Unit,
@@ -206,6 +211,7 @@ private fun FateCafeApp(
             },
             onVerifyAccess = onVerifyAccess,
             onProfileSelected = onProfileSelected,
+            onBetterFgoChanged = onBetterFgoChanged,
             onResetCompletedInstallation = onResetCompletedInstallation,
             onDownloadLatest = onDownloadLatest,
             onCancelImport = onCancelImport,
@@ -436,6 +442,7 @@ private fun InstallerScreen(
     onBackToCatalog: () -> Unit,
     onVerifyAccess: () -> Unit,
     onProfileSelected: (GameProfile) -> Unit,
+    onBetterFgoChanged: (Boolean) -> Unit,
     onResetCompletedInstallation: () -> Unit,
     onDownloadLatest: () -> Unit,
     onCancelImport: () -> Unit,
@@ -445,7 +452,8 @@ private fun InstallerScreen(
 ) {
     var showDetails by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
-    val selectedProfileBelongsToGame = state.selectedProfile in presentation.profiles
+    val selectedProfileBelongsToGame =
+        state.selectedProfile?.bundleProfile in presentation.profiles
     val installationJustFinished = state.isInstalled && !state.isWorking &&
         state.currentPhase == OperationPhase.CLEANUP && state.installerFailureCode == null
 
@@ -546,11 +554,32 @@ private fun InstallerScreen(
                     presentation.profiles.forEach { profile ->
                         RegionOption(
                             profile = profile,
-                            selected = state.selectedProfile == profile,
+                            selected = state.selectedProfile?.bundleProfile == profile,
                             enabled = state.installationAccessApproved && !state.isWorking,
                             onSelected = { onProfileSelected(profile) },
                         )
                     }
+                }
+                if (presentation.supportsBetterFgo && selectedProfileBelongsToGame) {
+                    Text(
+                        text = "Destino da instalação",
+                        color = LatteGold,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    InstallationDestinationOption(
+                        title = "Fate/Grand Order oficial",
+                        description = "Instala no aplicativo oficial da região selecionada.",
+                        selected = state.selectedProfile?.isBetterFgo == false,
+                        enabled = !state.isWorking,
+                        onSelected = { onBetterFgoChanged(false) },
+                    )
+                    InstallationDestinationOption(
+                        title = "BetterFGO",
+                        description = "Instala na pasta independente do cliente BetterFGO.",
+                        selected = state.selectedProfile?.isBetterFgo == true,
+                        enabled = !state.isWorking,
+                        onSelected = { onBetterFgoChanged(true) },
+                    )
                 }
                 if (!state.installationAccessApproved) {
                     Text(
@@ -753,15 +782,17 @@ private fun RegionOption(
     onSelected: () -> Unit,
 ) {
     val accent = if (selected) LatteGold else CafeMuted
-    val regionName = when (profile) {
+    val regionName = when (profile.bundleProfile) {
         GameProfile.JP -> "Japão"
         GameProfile.NA -> "América do Norte"
         GameProfile.BA -> "Global"
+        else -> error("Região não reconhecida")
     }
-    val regionCode = when (profile) {
+    val regionCode = when (profile.bundleProfile) {
         GameProfile.JP -> "JP"
         GameProfile.NA -> "NA"
         GameProfile.BA -> "GL"
+        else -> error("Região não reconhecida")
     }
     Surface(
         modifier = Modifier
@@ -801,11 +832,57 @@ private fun RegionOption(
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = if (profile == GameProfile.JP) {
+                    text = if (profile.bundleProfile == GameProfile.JP) {
                         "Servidor japonês"
                     } else {
                         "Servidor global em inglês"
                     },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CafeMuted,
+                )
+            }
+            RadioButton(
+                selected = selected,
+                onClick = onSelected,
+                enabled = enabled,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InstallationDestinationOption(
+    title: String,
+    description: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onSelected: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(enabled = enabled, onClick = onSelected),
+        shape = RoundedCornerShape(16.dp),
+        color = if (selected) LatteGold.copy(alpha = 0.10f) else CafeSurfaceRaised,
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (selected) LatteGold.copy(alpha = 0.72f) else CafeLine,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = if (enabled) LatteCream else CafeMuted,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = description,
                     style = MaterialTheme.typography.bodySmall,
                     color = CafeMuted,
                 )

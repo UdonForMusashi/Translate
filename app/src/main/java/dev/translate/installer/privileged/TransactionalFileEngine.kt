@@ -26,11 +26,15 @@ internal object PrivilegedProfiles {
     val JP = GameProfile.JP.toPrivilegedProfile(1)
     val NA = GameProfile.NA.toPrivilegedProfile(2)
     val BA = GameProfile.BA.toPrivilegedProfile(3)
+    val BETTER_JP = GameProfile.BETTER_JP.toPrivilegedProfile(4)
+    val BETTER_NA = GameProfile.BETTER_NA.toPrivilegedProfile(5)
 
     fun fromCode(code: Int): PrivilegedProfile = when (code) {
         JP.code -> JP
         NA.code -> NA
         BA.code -> BA
+        BETTER_JP.code -> BETTER_JP
+        BETTER_NA.code -> BETTER_NA
         else -> throw InstallEngineException(InstallError.INVALID_PROFILE)
     }
 

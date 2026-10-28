@@ -23,6 +23,17 @@ class TransactionalFileEngineTest {
     private lateinit var baRoot: File
     private lateinit var engine: TransactionalFileEngine
 
+    @Test fun `BetterFGO profiles use independent fixed packages and service codes`() {
+        assertEquals(4, PrivilegedProfiles.BETTER_JP.code)
+        assertEquals("io.rayshift.betterfgo", PrivilegedProfiles.BETTER_JP.packageName)
+        assertEquals(5, PrivilegedProfiles.BETTER_NA.code)
+        assertEquals("io.rayshift.betterfgo.en", PrivilegedProfiles.BETTER_NA.packageName)
+        assertEquals(PrivilegedProfiles.BETTER_JP, PrivilegedProfiles.fromCode(4))
+        assertEquals(PrivilegedProfiles.BETTER_NA, PrivilegedProfiles.fromCode(5))
+        assertEquals("files/data/d713/", PrivilegedProfiles.BETTER_JP.destinationRelativeDirectory)
+        assertEquals("files/data/d713/", PrivilegedProfiles.BETTER_NA.destinationRelativeDirectory)
+    }
+
     @Before fun setUp() {
         jpRoot = temporaryFolder.newFolder("jp")
         naRoot = temporaryFolder.newFolder("na")

@@ -54,6 +54,22 @@ class BundleVerifierTest {
         assertCode(BundleFailureCode.PROFILE_MISMATCH, fixture(GameProfile.JP), "profile", GameProfile.NA)
     }
 
+    @Test fun `accepts the regional authenticated bundle for BetterFGO`() {
+        val jp = fixture(GameProfile.JP)
+        val na = fixture(GameProfile.NA)
+
+        assertEquals(
+            "fixture-1",
+            verify(jp, File(temporaryFolder.root, "better-jp"), GameProfile.BETTER_JP)
+                .manifest.version,
+        )
+        assertEquals(
+            "fixture-1",
+            verify(na, File(temporaryFolder.root, "better-na"), GameProfile.BETTER_NA)
+                .manifest.version,
+        )
+    }
+
     @Test fun `rejects an unexpected archive entry`() {
         assertCode(BundleFailureCode.UNEXPECTED_ENTRY, fixture(GameProfile.NA, extra = "files/extra.bin"), "extra", GameProfile.NA)
     }

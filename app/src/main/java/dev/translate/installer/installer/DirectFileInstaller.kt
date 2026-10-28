@@ -148,9 +148,11 @@ internal class DirectFileInstaller(context: Context) : FileInstaller {
 
     private fun validateBundleProfile(profile: GameProfile, bundle: VerifiedBundle) {
         val manifest = bundle.manifest
-        if (manifest.profile != profile.name || manifest.profileId != profile.profileId ||
-            manifest.packageName != profile.packageName ||
-            manifest.destinationDirectory != profile.destinationRelativeDirectory
+        val bundleProfile = profile.bundleProfile
+        if (manifest.profile != bundleProfile.name ||
+            manifest.profileId != bundleProfile.profileId ||
+            manifest.packageName != bundleProfile.packageName ||
+            manifest.destinationDirectory != bundleProfile.destinationRelativeDirectory
         ) throw InstallerException("PROFILE_MISMATCH")
     }
 
@@ -168,6 +170,8 @@ internal class DirectFileInstaller(context: Context) : FileInstaller {
         GameProfile.JP -> PrivilegedProfiles.JP
         GameProfile.NA -> PrivilegedProfiles.NA
         GameProfile.BA -> PrivilegedProfiles.BA
+        GameProfile.BETTER_JP -> PrivilegedProfiles.BETTER_JP
+        GameProfile.BETTER_NA -> PrivilegedProfiles.BETTER_NA
     }
 
     private fun mapException(exception: Throwable): InstallerException = when (exception) {
