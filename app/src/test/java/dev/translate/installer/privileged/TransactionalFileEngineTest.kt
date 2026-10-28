@@ -12,7 +12,11 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.FileSystemException
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 
@@ -57,6 +61,94 @@ class TransactionalFileEngineTest {
         assertArrayEquals(translated, target.readBytes())
         assertEquals(expectedPermissions, Files.getPosixFilePermissions(target.toPath()))
         assertEquals(setOf(BIN, SPECIAL), jpRoot.list()!!.toSet())
+    }
+
+    @Test fun `BetterFGO falls back to a verified copy on emulator storage`() {
+        val original = "original-better-fgo".toByteArray()
+        val translated = "translated-better-fgo".toByteArray()
+        val target = File(naRoot, BIN).apply { writeBytes(original) }
+        engine = engine(fileOperations = emulatorFallbackOperations())
+
+        install(PrivilegedProfiles.BETTER_NA, BIN, translated)
+
+        assertArrayEquals(translated, target.readBytes())
+        assertEquals(setOf(BIN), naRoot.list()!!.toSet())
+    }
+
+    @Test fun `copy fallback restores the previous BetterFGO file after interruption`() {
+        val original = "original-better-fgo".toByteArray()
+        val translated = "translated-better-fgo".toByteArray()
+        val target = File(naRoot, BIN).apply { writeBytes(original) }
+        val operations = emulatorFallbackOperations { source, destination ->
+            if (source.fileName.toString().startsWith(".fate-cafe-install-") &&
+                destination.fileName.toString() == BIN
+            ) {
+                Files.write(
+                    destination,
+                    "partial".toByteArray(),
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE,
+                )
+                throw IOException("copy interrupted")
+            }
+            Files.copy(source, destination, StandardCopyOption.REPLACE_EXISTING)
+        }
+        engine = engine(fileOperations = operations)
+
+        val error = assertThrows(InstallEngineException::class.java) {
+            install(PrivilegedProfiles.BETTER_NA, BIN, translated)
+        }
+
+        assertEquals(InstallError.IO_FAILURE, error.error)
+        assertArrayEquals(original, target.readBytes())
+        assertEquals(setOf(BIN), naRoot.list()!!.toSet())
+    }
+
+    @Test fun `probe restores an interrupted BetterFGO rollback before continuing`() {
+        val original = "original-better-fgo".toByteArray()
+        File(naRoot, BIN).writeText("partial-new-file")
+        val rollback = File(
+            naRoot,
+            ".fate-cafe-rollback-${original.size}-${sha256(original)}-$BIN.partial",
+        )
+            .apply { writeBytes(original) }
+
+        engine.probe(PrivilegedProfiles.BETTER_NA, 0)
+
+        assertArrayEquals(original, File(naRoot, BIN).readBytes())
+        assertFalse(rollback.exists())
+        assertEquals(setOf(BIN), naRoot.list()!!.toSet())
+    }
+
+    @Test fun `probe discards an incomplete rollback only while original is intact`() {
+        val original = "original-better-fgo".toByteArray()
+        val target = File(naRoot, BIN).apply { writeBytes(original) }
+        val rollbackName =
+            ".fate-cafe-rollback-${original.size}-${sha256(original)}-$BIN.partial"
+        val rollback = File(naRoot, rollbackName).apply { writeText("partial") }
+
+        engine.probe(PrivilegedProfiles.BETTER_NA, 0)
+
+        assertArrayEquals(original, target.readBytes())
+        assertFalse(rollback.exists())
+        assertEquals(setOf(BIN), naRoot.list()!!.toSet())
+    }
+
+    @Test fun `probe refuses an incomplete rollback when destination also changed`() {
+        val original = "original-better-fgo".toByteArray()
+        val target = File(naRoot, BIN).apply { writeText("partial-target") }
+        val rollback = File(
+            naRoot,
+            ".fate-cafe-rollback-${original.size}-${sha256(original)}-$BIN.partial",
+        ).apply { writeText("partial-rollback") }
+
+        val error = assertThrows(InstallEngineException::class.java) {
+            engine.probe(PrivilegedProfiles.BETTER_NA, 0)
+        }
+
+        assertEquals(InstallError.IO_FAILURE, error.error)
+        assertEquals("partial-target", target.readText())
+        assertEquals("partial-rollback", rollback.readText())
     }
 
     @Test fun `allows authenticated bin to be added but special file must already exist`() {
@@ -248,6 +340,24 @@ class TransactionalFileEngineTest {
         assertEquals(setOf(EXCEL_DB), baRoot.list()!!.toSet())
     }
 
+    @Test fun `Blue Archive never uses the non-atomic copy fallback`() {
+        val original = "original-database".toByteArray()
+        val target = File(baRoot, EXCEL_DB).apply { writeBytes(original) }
+        var copyAttempted = false
+        engine = engine(
+            fileOperations = emulatorFallbackOperations { _, _ -> copyAttempted = true },
+        )
+
+        val error = assertThrows(InstallEngineException::class.java) {
+            install(PrivilegedProfiles.BA, EXCEL_DB, "translated-database".toByteArray())
+        }
+
+        assertEquals(InstallError.IO_FAILURE, error.error)
+        assertFalse(copyAttempted)
+        assertArrayEquals(original, target.readBytes())
+        assertEquals(setOf(EXCEL_DB), baRoot.list()!!.toSet())
+    }
+
     @Test fun `probe removes only the exact interrupted atomic staging file`() {
         val interrupted = File(baRoot, ".fate-cafe-install-ExcelDB.db.partial")
             .apply { writeText("partial") }
@@ -295,16 +405,33 @@ class TransactionalFileEngineTest {
         assertTrue(File(baRoot, EXCEL_DB).exists())
     }
 
-    private fun engine(usableSpace: Long? = null) = TransactionalFileEngine(
+    private fun engine(
+        usableSpace: Long? = null,
+        fileOperations: TransactionalFileOperations = TransactionalFileOperations(),
+    ) = TransactionalFileEngine(
         rootResolver = { profile ->
             when (profile) {
-                PrivilegedProfiles.JP -> jpRoot
-                PrivilegedProfiles.NA -> naRoot
+                PrivilegedProfiles.JP, PrivilegedProfiles.BETTER_JP -> jpRoot
+                PrivilegedProfiles.NA, PrivilegedProfiles.BETTER_NA -> naRoot
                 PrivilegedProfiles.BA -> baRoot
                 else -> error("perfil inesperado")
             }
         },
         usableSpaceProvider = { usableSpace ?: it.usableSpace },
+        fileOperations = fileOperations,
+    )
+
+    private fun emulatorFallbackOperations(
+        replacementCopy: (java.nio.file.Path, java.nio.file.Path) -> Unit = { source, destination ->
+            Files.copy(source, destination, StandardCopyOption.REPLACE_EXISTING)
+        },
+    ) = TransactionalFileOperations(
+        sync = { throw FileSystemException("translation.partial", null, "Invalid argument") },
+        atomicMove = { _, _ -> throw IOException("atomic rename failed") },
+        replacementMove = { source, destination ->
+            throw FileSystemException(source.toString(), destination.toString(), "Invalid argument")
+        },
+        replacementCopy = replacementCopy,
     )
 
     private fun install(profile: PrivilegedProfile, name: String, bytes: ByteArray) {

@@ -3,13 +3,19 @@ package dev.translate.installer.privileged
 import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.domain.ProfileContentPolicy
 import dev.translate.installer.domain.decodeTechnical
+import dev.translate.installer.io.FileReplacementMode
+import dev.translate.installer.io.isStorageFeatureUnsupported
 import dev.translate.installer.io.moveReplacingCompatible
+import dev.translate.installer.io.syncFileCompatible
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.FileSystemException
 import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
@@ -77,9 +83,28 @@ internal data class PrivilegedInstalledFile(
     val sha256: String,
 )
 
+internal class TransactionalFileOperations(
+    val sync: (FileChannel) -> Unit = { it.force(true) },
+    val atomicMove: (Path, Path) -> Unit = { source, destination ->
+        Files.move(
+            source,
+            destination,
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING,
+        )
+    },
+    val replacementMove: (Path, Path) -> Unit = { source, destination ->
+        Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING)
+    },
+    val replacementCopy: (Path, Path) -> Unit = { source, destination ->
+        Files.copy(source, destination, StandardCopyOption.REPLACE_EXISTING)
+    },
+)
+
 internal class TransactionalFileEngine(
     private val rootResolver: (PrivilegedProfile) -> File,
     private val usableSpaceProvider: (File) -> Long = { it.usableSpace },
+    private val fileOperations: TransactionalFileOperations = TransactionalFileOperations(),
 ) {
     @Synchronized
     fun probe(profile: PrivilegedProfile, requiredBytes: Long) = guarded {
@@ -123,7 +148,7 @@ internal class TransactionalFileEngine(
                 LinkOption.NOFOLLOW_LINKS,
             ).use { output ->
                 copyVerifiedSource(input.channel, output, record, progress)
-                output.force(true)
+                syncFileCompatible(output, fileOperations.sync)
             }
             verifyTarget(temporary, record)
             targetPermissions?.let { applyPosixPermissions(temporary, it) }
@@ -133,8 +158,31 @@ internal class TransactionalFileEngine(
             } else if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
                 unsafe()
             }
-            moveReplacingCompatible(temporary.toPath(), target.toPath())
+            val replacementMode = moveReplacingCompatible(
+                source = temporary.toPath(),
+                destination = target.toPath(),
+                atomicMove = fileOperations.atomicMove,
+                replacementMove = fileOperations.replacementMove,
+                replacementCopy = if (profile.contentPolicy == ProfileContentPolicy.FGO_TRANSLATION) {
+                    { source, destination ->
+                        copyReplacingWithRollback(
+                            profile = profile,
+                            root = root,
+                            source = source,
+                            destination = destination,
+                            record = record,
+                            targetExisted = targetExisted,
+                            targetPermissions = targetPermissions,
+                        )
+                    }
+                } else {
+                    null
+                },
+            )
             verifyTarget(target, record)
+            if (replacementMode == FileReplacementMode.REPLACEMENT_COPY) {
+                deleteManagedTemporary(temporary)
+            }
         } catch (exception: Exception) {
             deleteManagedTemporary(temporary)
             throw exception
@@ -293,6 +341,79 @@ internal class TransactionalFileEngine(
         }
     }
 
+    private fun copyReplacingWithRollback(
+        profile: PrivilegedProfile,
+        root: File,
+        source: Path,
+        destination: Path,
+        record: PrivilegedInstalledFile,
+        targetExisted: Boolean,
+        targetPermissions: Set<PosixFilePermission>?,
+    ) {
+        val target = destination.toFile()
+        val original = if (targetExisted) {
+            requireExistingRegularFile(target)
+            FileSnapshot(target.length(), sha256(target))
+        } else {
+            null
+        }
+        val rollback = original?.let {
+            safeChild(root, rollbackTemporaryName(target.name, it)).also { rollbackFile ->
+                deleteManagedTemporary(rollbackFile)
+                ensureSpace(root, it.size, reclaimableBytes = 0)
+                try {
+                    fileOperations.replacementCopy(target.toPath(), rollbackFile.toPath())
+                    verifySnapshot(rollbackFile, it)
+                } catch (exception: Exception) {
+                    if (rollbackFile.exists()) deleteManagedTemporary(rollbackFile)
+                    throw exception
+                }
+            }
+        }
+
+        var replacementSucceeded = false
+        var originalRestored = false
+        try {
+            if (!targetExisted && Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) unsafe()
+            fileOperations.replacementCopy(source, destination)
+            targetPermissions?.let { applyPosixPermissions(target, it) }
+            verifyTarget(target, record)
+            replacementSucceeded = true
+        } catch (replacementFailure: Exception) {
+            try {
+                if (original != null && rollback != null) {
+                    requireExistingRegularFile(rollback)
+                    fileOperations.replacementCopy(rollback.toPath(), destination)
+                    targetPermissions?.let { applyPosixPermissions(target, it) }
+                    verifySnapshot(target, original)
+                } else {
+                    deleteFailedNewTarget(profile, target)
+                }
+                originalRestored = true
+            } catch (restoreFailure: Exception) {
+                restoreFailure.addSuppressed(replacementFailure)
+                throw restoreFailure
+            }
+            throw replacementFailure
+        } finally {
+            if ((replacementSucceeded || originalRestored) && rollback?.exists() == true) {
+                deleteManagedTemporary(rollback)
+            }
+        }
+    }
+
+    private fun verifySnapshot(file: File, snapshot: FileSnapshot) {
+        requireExistingRegularFile(file)
+        if (file.length() != snapshot.size || sha256(file) != snapshot.sha256) io()
+    }
+
+    private fun deleteFailedNewTarget(profile: PrivilegedProfile, target: File) {
+        if (!Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) return
+        requireExistingRegularFile(target)
+        requireFileName(profile, target.name)
+        Files.delete(target.toPath())
+    }
+
     private fun targetMatches(file: File, record: PrivilegedInstalledFile): Boolean =
         file.length() == record.size && sha256(file) == record.sha256
 
@@ -302,16 +423,28 @@ internal class TransactionalFileEngine(
             PosixFileAttributeView::class.java,
             LinkOption.NOFOLLOW_LINKS,
         )?.readAttributes()?.permissions()
-    } catch (_: UnsupportedOperationException) {
+    } catch (exception: Exception) {
+        if (!isPosixMetadataUnsupported(exception)) throw exception
         null
     }
 
     private fun applyPosixPermissions(file: File, permissions: Set<PosixFilePermission>) {
-        Files.getFileAttributeView(
-            file.toPath(),
-            PosixFileAttributeView::class.java,
-            LinkOption.NOFOLLOW_LINKS,
-        )?.setPermissions(permissions)
+        try {
+            Files.getFileAttributeView(
+                file.toPath(),
+                PosixFileAttributeView::class.java,
+                LinkOption.NOFOLLOW_LINKS,
+            )?.setPermissions(permissions)
+        } catch (exception: Exception) {
+            if (!isPosixMetadataUnsupported(exception)) throw exception
+        }
+    }
+
+    private fun isPosixMetadataUnsupported(exception: Exception): Boolean {
+        if (isStorageFeatureUnsupported(exception)) return true
+        if (exception !is FileSystemException) return false
+        val details = "${exception.message.orEmpty()} ${exception.reason.orEmpty()}".lowercase()
+        return "operation not permitted" in details
     }
 
     private fun ensureSpace(root: File, requiredBytes: Long, reclaimableBytes: Long) {
@@ -360,6 +493,14 @@ internal class TransactionalFileEngine(
     private fun cleanupManagedArtifacts(profile: PrivilegedProfile, root: File) {
         val children = root.listFiles() ?: io()
         children.forEach { child ->
+            val rollback = parseRollbackTemporaryName(child.name)
+            if (rollback != null &&
+                profile.contentPolicy.isAllowedFileName(rollback.originalName)
+            ) {
+                restoreInterruptedRollback(root, child, rollback)
+            }
+        }
+        children.forEach { child ->
             val prefix = ATOMIC_TEMPORARY_PREFIXES.firstOrNull {
                 child.name.startsWith(it) && child.name.endsWith(ATOMIC_TEMPORARY_SUFFIX)
             }
@@ -380,6 +521,56 @@ internal class TransactionalFileEngine(
 
     private fun atomicTemporaryName(fileName: String) =
         "$ATOMIC_TEMPORARY_PREFIX$fileName$ATOMIC_TEMPORARY_SUFFIX"
+
+    private fun rollbackTemporaryName(fileName: String, snapshot: FileSnapshot) =
+        "$ROLLBACK_TEMPORARY_PREFIX${snapshot.size}-${snapshot.sha256}-$fileName" +
+            ATOMIC_TEMPORARY_SUFFIX
+
+    private fun parseRollbackTemporaryName(name: String): InterruptedRollback? {
+        if (!name.startsWith(ROLLBACK_TEMPORARY_PREFIX) ||
+            !name.endsWith(ATOMIC_TEMPORARY_SUFFIX)
+        ) {
+            return null
+        }
+        val encoded = name
+            .removePrefix(ROLLBACK_TEMPORARY_PREFIX)
+            .removeSuffix(ATOMIC_TEMPORARY_SUFFIX)
+        val sizeSeparator = encoded.indexOf('-')
+        if (sizeSeparator !in 1..10) return null
+        val size = encoded.substring(0, sizeSeparator).toLongOrNull() ?: return null
+        val hashStart = sizeSeparator + 1
+        val hashEnd = hashStart + SHA_256_LENGTH
+        if (hashEnd >= encoded.length || encoded[hashEnd] != '-') return null
+        val hash = encoded.substring(hashStart, hashEnd)
+        val originalName = encoded.substring(hashEnd + 1)
+        if (size < 0 || size > MAX_FILE_BYTES || !SHA_256.matches(hash)) return null
+        return InterruptedRollback(originalName, FileSnapshot(size, hash))
+    }
+
+    private fun restoreInterruptedRollback(
+        root: File,
+        rollback: File,
+        metadata: InterruptedRollback,
+    ) {
+        requireExistingRegularFile(rollback)
+        val target = safeChild(root, metadata.originalName)
+        if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            requireExistingRegularFile(target)
+        }
+        if (!matchesSnapshot(rollback, metadata.snapshot)) {
+            if (target.exists() && matchesSnapshot(target, metadata.snapshot)) {
+                deleteManagedTemporary(rollback)
+                return
+            }
+            io()
+        }
+        fileOperations.replacementCopy(rollback.toPath(), target.toPath())
+        verifySnapshot(target, metadata.snapshot)
+        deleteManagedTemporary(rollback)
+    }
+
+    private fun matchesSnapshot(file: File, snapshot: FileSnapshot): Boolean =
+        file.length() == snapshot.size && sha256(file) == snapshot.sha256
 
     private fun deleteManagedTemporary(file: File) {
         val path = file.toPath()
@@ -424,8 +615,10 @@ internal class TransactionalFileEngine(
         private const val MAX_HASHES_PER_NAME = 2
         private const val MAX_FILE_BYTES = 1024L * 1024L * 1024L
         private const val MAX_TOTAL_BYTES = 4L * 1024L * 1024L * 1024L
+        private const val SHA_256_LENGTH = 64
         private const val MINIMUM_FREE_BYTES = 64L * 1024L * 1024L
         private const val ATOMIC_TEMPORARY_PREFIX = ".fate-cafe-install-"
+        private const val ROLLBACK_TEMPORARY_PREFIX = ".fate-cafe-rollback-"
         private val ATOMIC_TEMPORARY_PREFIXES = listOf(
             ATOMIC_TEMPORARY_PREFIX,
             ".barista-latte-install-",
@@ -443,6 +636,16 @@ internal class TransactionalFileEngine(
         )
     }
 }
+
+private data class FileSnapshot(
+    val size: Long,
+    val sha256: String,
+)
+
+private data class InterruptedRollback(
+    val originalName: String,
+    val snapshot: FileSnapshot,
+)
 
 private fun ByteArray.toHex(): String = joinToString("") {
     "%02x".format(it.toInt() and 0xff)

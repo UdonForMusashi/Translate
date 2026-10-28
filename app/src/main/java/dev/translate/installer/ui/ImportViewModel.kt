@@ -169,7 +169,6 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             it.copy(
                 currentPhase = null,
                 progress = null,
-                events = emptyList(),
                 installerCapabilities = null,
                 gameClosedConfirmed = false,
             )
@@ -324,6 +323,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 isWorking = true,
                 currentPhase = OperationPhase.DOWNLOAD,
                 progress = null,
+                events = emptyList(),
                 failureCode = null,
                 installerFailureCode = null,
             )
@@ -572,6 +572,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 isWorking = true,
                 currentPhase = OperationPhase.CLEANUP,
                 progress = null,
+                events = emptyList(),
                 installerFailureCode = null,
             )
         }

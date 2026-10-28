@@ -3,6 +3,7 @@ package dev.translate.installer.data.remote
 import com.google.gson.Strictness
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
+import dev.translate.installer.BuildConfig
 import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.security.BundleFailureCode
 import dev.translate.installer.security.BundleValidationException
@@ -237,7 +238,7 @@ class GitHubReleaseClient(
     private companion object {
         const val OWNER = "UdonForMusashi"
         const val API_VERSION = "2022-11-28"
-        const val USER_AGENT = "FateCafe/0.7.0"
+        val USER_AGENT = "FateCafe/${BuildConfig.VERSION_NAME}"
         const val JSON_ACCEPT = "application/vnd.github+json"
         const val BINARY_ACCEPT = "application/octet-stream"
         const val CONNECT_TIMEOUT_MS = 15_000
