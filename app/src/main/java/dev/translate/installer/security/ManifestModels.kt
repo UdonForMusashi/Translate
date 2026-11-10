@@ -17,6 +17,7 @@ data class LocalBundleManifest(
 data class ManifestFile(
     val name: String,
     val archiveEntry: String,
+    val destinationDirectory: String?,
     val size: Long,
     val sha256: String,
 )

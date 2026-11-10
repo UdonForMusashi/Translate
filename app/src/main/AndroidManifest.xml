@@ -13,8 +13,9 @@
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
-        android:icon="@drawable/ic_launcher_foreground"
+        android:icon="@drawable/fate_cafe_logo"
         android:label="@string/app_name"
+        android:roundIcon="@drawable/fate_cafe_logo"
         android:supportsRtl="true"
         android:theme="@style/Theme.FateCafe"
         android:usesCleartextTraffic="false">

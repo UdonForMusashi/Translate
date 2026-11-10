@@ -1,6 +1,7 @@
 package dev.translate.installer.security
 
 import dev.translate.installer.domain.GameProfile
+import dev.translate.installer.domain.ProfileContentPolicy
 import kotlinx.coroutines.CancellationException
 import org.apache.commons.compress.archivers.zip.UnixStat
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
@@ -37,6 +38,61 @@ class BundleVerifierTest {
         val second = fixture(GameProfile.NA, version = "20260824-020202", binName = "b.bin")
         assertEquals("20260823-010101", verify(first, File(temporaryFolder.root, "a"), GameProfile.NA).manifest.version)
         assertEquals("20260824-020202", verify(second, File(temporaryFolder.root, "b"), GameProfile.NA).manifest.version)
+    }
+
+    @Test fun `authenticates and extracts a schema 3 bundle with servant data`() {
+        val fixture = servantFixture(GameProfile.NA)
+        val extraction = File(temporaryFolder.root, "servant-data")
+
+        val result = verify(fixture, extraction, GameProfile.NA)
+
+        assertEquals(3L, result.manifest.schemaVersion)
+        assertEquals(3L, result.manifest.fileCount)
+        ProfileContentPolicy.FGO_SERVANT_FILE_NAMES.forEach { name ->
+            assertTrue(File(extraction, "files/$name").isFile)
+        }
+    }
+
+    @Test fun `accepts schema 3 servant data for the matching BetterFGO region`() {
+        val fixture = servantFixture(GameProfile.JP)
+
+        val result = verify(
+            fixture,
+            File(temporaryFolder.root, "better-servant-data"),
+            GameProfile.BETTER_JP,
+        )
+
+        assertEquals(3L, result.manifest.schemaVersion)
+        assertEquals("JP", result.manifest.profile)
+    }
+
+    @Test fun `rejects missing translated servant data in schema 3`() {
+        val fixture = servantFixture(
+            GameProfile.JP,
+            servantNames = emptySet(),
+        )
+
+        assertCode(
+            BundleFailureCode.FILE_COUNT_MISMATCH,
+            fixture,
+            "incomplete-servant-data",
+            GameProfile.JP,
+        )
+    }
+
+    @Test fun `rejects auxiliary servant controls in a published bundle`() {
+        val fixture = servantFixture(
+            GameProfile.JP,
+            servantNames = ProfileContentPolicy.FGO_SERVANT_FILE_NAMES +
+                ProfileContentPolicy.FGO_SERVANT_LIST_FILE,
+        )
+
+        assertCode(
+            BundleFailureCode.UNSAFE_ENTRY,
+            fixture,
+            "auxiliary-servant-control",
+            GameProfile.JP,
+        )
     }
 
     @Test fun `authenticates and extracts the Blue Archive database profile`() {
@@ -230,6 +286,43 @@ class BundleVerifierTest {
             zip.entry("files/ExcelDB.db", database)
         }
         return Fixture(archive, database, byteArrayOf())
+    }
+
+    private fun servantFixture(
+        profile: GameProfile,
+        servantNames: Set<String> = ProfileContentPolicy.FGO_SERVANT_FILE_NAMES,
+    ): Fixture {
+        val storyName = "123abc.bin"
+        val story = "translated-story".toByteArray()
+        val special = "translated-catalog".toByteArray()
+        val payloads = linkedMapOf(
+            storyName to story,
+            SPECIAL to special,
+        )
+        servantNames.sorted().forEach { name ->
+            payloads[name] = "translated-$name".toByteArray()
+        }
+        val files = payloads.entries.joinToString(",") { (name, bytes) ->
+            val destination = profile.contentPolicy.destinationDirectoryFor(name)
+            """{"name":"$name","archiveEntry":"files/$name","destinationDirectory":"$destination","size":${bytes.size},"sha256":"${sha256(bytes)}"}"""
+        }
+        val totalSize = payloads.values.sumOf(ByteArray::size)
+        val manifest = """
+            {"schemaVersion":3,"keyId":"${ManifestPolicy.RELEASE_KEY_ID}","profile":"${profile.name}","profileId":"${profile.profileId}","packageName":"${profile.packageName}","destinationDirectory":"${profile.destinationRelativeDirectory}","version":"fixture-servant-1","createdAt":"2026-11-07T00:00:00Z","fileCount":${payloads.size},"uncompressedSize":$totalSize,"files":[$files]}
+        """.trimIndent().toByteArray()
+        val signature = Signature.getInstance(ManifestPolicy.SUPPORTED_ALGORITHM).run {
+            initSign(keyPair.private); update(manifest); sign()
+        }
+        val envelope = """
+            {"schemaVersion":3,"keyId":"${ManifestPolicy.RELEASE_KEY_ID}","algorithm":"${ManifestPolicy.SUPPORTED_ALGORITHM}","signature":"${Base64.getEncoder().encodeToString(signature)}"}
+        """.trimIndent().toByteArray()
+        val archive = temporaryFolder.newFile("bundle-servant-${System.nanoTime()}.zip")
+        ZipOutputStream(archive.outputStream().buffered()).use { zip ->
+            zip.entry("manifest.json", manifest)
+            zip.entry("manifest.sig", envelope)
+            payloads.forEach { (name, bytes) -> zip.entry("files/$name", bytes) }
+        }
+        return Fixture(archive, story, special)
     }
 
     private fun ZipOutputStream.entry(name: String, bytes: ByteArray) {

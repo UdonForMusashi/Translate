@@ -540,6 +540,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             fileInstaller.probe(
                 profile,
                 bundle.verifiedBundle.manifest.uncompressedSize,
+                bundle.verifiedBundle.manifest.files.map { it.name },
             )
         } catch (exception: InstallerException) {
             InstallerCapabilities(false, exception.reasonCode)

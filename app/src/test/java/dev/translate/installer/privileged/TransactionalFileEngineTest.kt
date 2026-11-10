@@ -1,5 +1,6 @@
 package dev.translate.installer.privileged
 
+import dev.translate.installer.domain.ProfileContentPolicy
 import dev.translate.installer.domain.decodeTechnical
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -23,7 +24,9 @@ import java.security.MessageDigest
 class TransactionalFileEngineTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
     private lateinit var jpRoot: File
+    private lateinit var jpServantRoot: File
     private lateinit var naRoot: File
+    private lateinit var naServantRoot: File
     private lateinit var baRoot: File
     private lateinit var engine: TransactionalFileEngine
 
@@ -39,8 +42,12 @@ class TransactionalFileEngineTest {
     }
 
     @Before fun setUp() {
-        jpRoot = temporaryFolder.newFolder("jp")
-        naRoot = temporaryFolder.newFolder("na")
+        val jpData = temporaryFolder.newFolder("jp-data")
+        jpRoot = File(jpData, "d713").apply { mkdir() }
+        jpServantRoot = File(jpData, "bfaa").apply { mkdir() }
+        val naData = temporaryFolder.newFolder("na-data")
+        naRoot = File(naData, "d713").apply { mkdir() }
+        naServantRoot = File(naData, "bfaa").apply { mkdir() }
         baRoot = temporaryFolder.newFolder("ba")
         engine = engine()
     }
@@ -162,6 +169,58 @@ class TransactionalFileEngineTest {
         }
         assertEquals(InstallError.TARGET_FILE_MISSING, error.error)
         assertFalse(File(jpRoot, SPECIAL).exists())
+    }
+
+    @Test fun `routes servant data to bfaa and requires the official targets`() {
+        val servantName = ProfileContentPolicy.FGO_SERVANT_CACHE_FILE
+        val translated = "translated-servant-cache".toByteArray()
+        val target = File(jpServantRoot, servantName).apply { writeText("official-cache") }
+
+        install(PrivilegedProfiles.JP, servantName, translated)
+
+        assertArrayEquals(translated, target.readBytes())
+        assertFalse(File(jpRoot, servantName).exists())
+
+        target.delete()
+        val error = assertThrows(InstallEngineException::class.java) {
+            install(PrivilegedProfiles.JP, servantName, "translated-cache".toByteArray())
+        }
+        assertEquals(InstallError.TARGET_FILE_MISSING, error.error)
+
+        val controlError = assertThrows(InstallEngineException::class.java) {
+            install(
+                PrivilegedProfiles.JP,
+                ProfileContentPolicy.FGO_SERVANT_LIST_FILE,
+                "official-control".toByteArray(),
+            )
+        }
+        assertEquals(InstallError.INVALID_FILE_NAME, controlError.error)
+    }
+
+    @Test fun `preflight checks every fixed FGO target before the first write`() {
+        val originalStory = "official-story".toByteArray()
+        File(jpRoot, BIN).writeBytes(originalStory)
+        File(jpRoot, SPECIAL).writeText("official-catalog")
+        val requiredNames = listOf(BIN, SPECIAL) +
+            ProfileContentPolicy.FGO_SERVANT_FILE_NAMES.sorted()
+
+        val error = assertThrows(InstallEngineException::class.java) {
+            engine.probe(PrivilegedProfiles.JP, 0, requiredNames)
+        }
+
+        assertEquals(InstallError.TARGET_FILE_MISSING, error.error)
+        assertArrayEquals(originalStory, File(jpRoot, BIN).readBytes())
+    }
+
+    @Test fun `preflight accepts a complete FGO story and servant destination`() {
+        File(jpRoot, SPECIAL).writeText("official-catalog")
+        ProfileContentPolicy.FGO_SERVANT_FILE_NAMES.forEach {
+            File(jpServantRoot, it).writeText("official-servant-data")
+        }
+        val requiredNames = listOf(BIN, SPECIAL) +
+            ProfileContentPolicy.FGO_SERVANT_FILE_NAMES.sorted()
+
+        engine.probe(PrivilegedProfiles.JP, 0, requiredNames)
     }
 
     @Test fun `rejects traversal absolute paths separators and unlisted extensions`() {

@@ -128,6 +128,7 @@ private fun JsonReader.readFiles(): List<ManifestFile> {
 private fun JsonReader.readManifestFile(): ManifestFile {
     var name: String? = null
     var archiveEntry: String? = null
+    var destinationDirectory: String? = null
     var size: Long? = null
     var sha256: String? = null
 
@@ -135,6 +136,7 @@ private fun JsonReader.readManifestFile(): ManifestFile {
         when (fieldName) {
             "name" -> name = readLimitedString(128)
             "archiveEntry" -> archiveEntry = readLimitedString(256)
+            "destinationDirectory" -> destinationDirectory = readLimitedString(64)
             "size" -> size = readUnsignedLong()
             "sha256" -> sha256 = readLimitedString(64)
             else -> fail(BundleFailureCode.MANIFEST_INVALID)
@@ -144,6 +146,7 @@ private fun JsonReader.readManifestFile(): ManifestFile {
     return ManifestFile(
         name = name.requiredManifest(),
         archiveEntry = archiveEntry.requiredManifest(),
+        destinationDirectory = destinationDirectory,
         size = size.requiredManifest(),
         sha256 = sha256.requiredManifest(),
     )

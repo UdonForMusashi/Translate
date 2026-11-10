@@ -25,7 +25,11 @@ class InstallerException(val reasonCode: String, cause: Throwable? = null) :
     Exception(reasonCode, cause)
 
 interface FileInstaller {
-    suspend fun probe(profile: GameProfile, requiredBytes: Long): InstallerCapabilities
+    suspend fun probe(
+        profile: GameProfile,
+        requiredBytes: Long,
+        requiredFileNames: List<String>,
+    ): InstallerCapabilities
     suspend fun install(
         profile: GameProfile,
         bundle: VerifiedBundle,

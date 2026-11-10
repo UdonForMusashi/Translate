@@ -107,9 +107,20 @@ internal class TransactionalFileEngine(
     private val fileOperations: TransactionalFileOperations = TransactionalFileOperations(),
 ) {
     @Synchronized
-    fun probe(profile: PrivilegedProfile, requiredBytes: Long) = guarded {
+    fun probe(
+        profile: PrivilegedProfile,
+        requiredBytes: Long,
+        requiredFileNames: List<String> = emptyList(),
+    ) = guarded {
+        validateRequiredFileNames(profile, requiredFileNames)
         val root = requireRoot(profile)
         cleanupManagedArtifacts(profile, root)
+        requiredFileNames.forEach { name ->
+            if (!profile.contentPolicy.mayCreateMissingFile(name)) {
+                val target = safeChild(requireTargetDirectory(profile, root, name), name)
+                requireExistingRegularFile(target)
+            }
+        }
         ensureSpace(root, requiredBytes, reclaimableBytes = 0)
     }
 
@@ -125,19 +136,20 @@ internal class TransactionalFileEngine(
         val record = validateRecord(profile, fileName, expectedSize, expectedSha256)
         val root = requireRoot(profile)
         cleanupManagedArtifacts(profile, root)
-        val target = safeChild(root, record.name)
+        val targetDirectory = requireTargetDirectory(profile, root, record.name)
+        val target = safeChild(targetDirectory, record.name)
         val targetExisted = Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)
         if (targetExisted) {
             requireExistingRegularFile(target)
         } else if (!profile.contentPolicy.mayCreateMissingFile(record.name)) {
             throw InstallEngineException(InstallError.TARGET_FILE_MISSING)
         }
-        ensureSpace(root, record.size, reclaimableBytes = 0)
+        ensureSpace(targetDirectory, record.size, reclaimableBytes = 0)
 
         verifySource(input, record)
         input.channel.position(0)
 
-        val temporary = safeChild(root, atomicTemporaryName(record.name))
+        val temporary = safeChild(targetDirectory, atomicTemporaryName(record.name))
         deleteManagedTemporary(temporary)
         val targetPermissions = if (targetExisted) readPosixPermissions(target) else null
         try {
@@ -167,7 +179,7 @@ internal class TransactionalFileEngine(
                     { source, destination ->
                         copyReplacingWithRollback(
                             profile = profile,
-                            root = root,
+                            root = targetDirectory,
                             source = source,
                             destination = destination,
                             record = record,
@@ -195,7 +207,10 @@ internal class TransactionalFileEngine(
         val root = requireRoot(profile)
         cleanupManagedArtifacts(profile, root)
         records.forEach { record ->
-            val target = safeChild(root, record.name)
+            val target = safeChild(
+                requireTargetDirectory(profile, root, record.name),
+                record.name,
+            )
             requireExistingRegularFile(target)
             verifyTarget(target, record)
         }
@@ -214,7 +229,7 @@ internal class TransactionalFileEngine(
         val recordsByName = records.groupBy { it.name }
 
         val removableNames = recordsByName.filter { (name, alternatives) ->
-            val target = safeChild(root, name)
+            val target = safeChild(requireTargetDirectory(profile, root, name), name)
             if (target.exists()) {
                 requireExistingRegularFile(target)
                 alternatives.any { targetMatches(target, it) }
@@ -224,7 +239,7 @@ internal class TransactionalFileEngine(
         }.keys
 
         recordsByName.forEach { (name, alternatives) ->
-            val target = safeChild(root, name)
+            val target = safeChild(requireTargetDirectory(profile, root, name), name)
             if (name in removableNames && target.exists()) {
                 requireExistingRegularFile(target)
                 if (alternatives.any { targetMatches(target, it) } && !target.delete()) io()
@@ -305,6 +320,18 @@ internal class TransactionalFileEngine(
         if (!profile.contentPolicy.isValidFileNameSet(recordsByName.keys)) receiptInvalid()
     }
 
+    private fun validateRequiredFileNames(
+        profile: PrivilegedProfile,
+        requiredFileNames: List<String>,
+    ) {
+        if (requiredFileNames.isEmpty()) return
+        val names = requiredFileNames.toSet()
+        if (requiredFileNames.size > MAX_FILES || names.size != requiredFileNames.size ||
+            !profile.contentPolicy.isValidFileNameSet(names)
+        ) receiptInvalid()
+        requiredFileNames.forEach { requireFileName(profile, it) }
+    }
+
     private fun validateRecord(
         profile: PrivilegedProfile,
         name: String,
@@ -333,6 +360,32 @@ internal class TransactionalFileEngine(
             throw InstallEngineException(InstallError.TARGET_FILE_MISSING)
         }
         if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) unsafe()
+    }
+
+    private fun requireTargetDirectory(
+        profile: PrivilegedProfile,
+        storyRoot: File,
+        fileName: String,
+    ): File {
+        if (profile.contentPolicy != ProfileContentPolicy.FGO_TRANSLATION ||
+            fileName !in ProfileContentPolicy.FGO_SERVANT_FILE_NAMES
+        ) return storyRoot
+
+        val dataRoot = storyRoot.parentFile ?: unsafe()
+        if (!dataRoot.exists() || !dataRoot.isDirectory ||
+            Files.isSymbolicLink(dataRoot.toPath()) || dataRoot.canonicalFile != dataRoot
+        ) unsafe()
+        val servantRoot = File(dataRoot, SERVANT_DIRECTORY_NAME).absoluteFile
+        if (!servantRoot.exists() || !servantRoot.isDirectory) {
+            throw InstallEngineException(InstallError.TARGET_UNAVAILABLE)
+        }
+        if (Files.isSymbolicLink(servantRoot.toPath()) ||
+            servantRoot.canonicalFile.parentFile != dataRoot.canonicalFile
+        ) unsafe()
+        if (!Files.isWritable(servantRoot.toPath())) {
+            throw InstallEngineException(InstallError.TARGET_NOT_WRITABLE)
+        }
+        return servantRoot
     }
 
     private fun verifyTarget(file: File, record: PrivilegedInstalledFile) {
@@ -491,11 +544,28 @@ internal class TransactionalFileEngine(
     }
 
     private fun cleanupManagedArtifacts(profile: PrivilegedProfile, root: File) {
+        cleanupManagedArtifactsInDirectory(profile, root)
+        if (profile.contentPolicy != ProfileContentPolicy.FGO_TRANSLATION) return
+        val servantRoot = File(root.parentFile ?: return, SERVANT_DIRECTORY_NAME)
+        if (servantRoot.exists()) {
+            requireTargetDirectory(
+                profile,
+                root,
+                ProfileContentPolicy.FGO_SERVANT_CACHE_FILE,
+            )
+            cleanupManagedArtifactsInDirectory(profile, servantRoot)
+        }
+    }
+
+    private fun cleanupManagedArtifactsInDirectory(
+        profile: PrivilegedProfile,
+        root: File,
+    ) {
         val children = root.listFiles() ?: io()
         children.forEach { child ->
             val rollback = parseRollbackTemporaryName(child.name)
             if (rollback != null &&
-                profile.contentPolicy.isAllowedFileName(rollback.originalName)
+                isManagedNameForDirectory(profile, root, rollback.originalName)
             ) {
                 restoreInterruptedRollback(root, child, rollback)
             }
@@ -507,7 +577,7 @@ internal class TransactionalFileEngine(
             val originalName = prefix?.let {
                 child.name.removePrefix(it).removeSuffix(ATOMIC_TEMPORARY_SUFFIX)
             }
-            if (originalName != null && profile.contentPolicy.isAllowedFileName(originalName)) {
+            if (originalName != null && isManagedNameForDirectory(profile, root, originalName)) {
                 deleteManagedTemporary(child)
             }
         }
@@ -517,6 +587,17 @@ internal class TransactionalFileEngine(
                 safeDeleteLegacyTree(child)
             }
         }
+    }
+
+    private fun isManagedNameForDirectory(
+        profile: PrivilegedProfile,
+        directory: File,
+        name: String,
+    ): Boolean {
+        if (!profile.contentPolicy.isAllowedFileName(name)) return false
+        if (profile.contentPolicy != ProfileContentPolicy.FGO_TRANSLATION) return true
+        val servantName = name in ProfileContentPolicy.FGO_SERVANT_FILE_NAMES
+        return servantName == (directory.name == SERVANT_DIRECTORY_NAME)
     }
 
     private fun atomicTemporaryName(fileName: String) =
@@ -617,6 +698,7 @@ internal class TransactionalFileEngine(
         private const val MAX_TOTAL_BYTES = 4L * 1024L * 1024L * 1024L
         private const val SHA_256_LENGTH = 64
         private const val MINIMUM_FREE_BYTES = 64L * 1024L * 1024L
+        private const val SERVANT_DIRECTORY_NAME = "bfaa"
         private const val ATOMIC_TEMPORARY_PREFIX = ".fate-cafe-install-"
         private const val ROLLBACK_TEMPORARY_PREFIX = ".fate-cafe-rollback-"
         private val ATOMIC_TEMPORARY_PREFIXES = listOf(

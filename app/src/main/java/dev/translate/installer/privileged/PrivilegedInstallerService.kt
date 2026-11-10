@@ -23,10 +23,19 @@ class PrivilegedInstallerService : IPrivilegedInstallerService.Stub {
         engine = createEngine()
     }
 
-    override fun probe(profileCode: Int, requiredBytes: Long): Int {
+    override fun probe(
+        profileCode: Int,
+        requiredBytes: Long,
+        requiredFileNames: Array<out String>?,
+    ): Int {
         if (!isCallerValid()) return InstallError.INVALID_CALLER.serviceCode
         return runCatching {
-            engine.probe(PrivilegedProfiles.fromCode(profileCode), requiredBytes)
+            engine.probe(
+                PrivilegedProfiles.fromCode(profileCode),
+                requiredBytes,
+                requiredFileNames?.toList()
+                    ?: throw InstallEngineException(InstallError.RECEIPT_INVALID),
+            )
             PROBE_AVAILABLE
         }.getOrElse(::errorCode)
     }

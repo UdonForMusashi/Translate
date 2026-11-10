@@ -1,6 +1,7 @@
 package dev.translate.installer.security
 
 import dev.translate.installer.domain.GameProfile
+import dev.translate.installer.domain.ProfileContentPolicy
 import dev.translate.installer.domain.decodeTechnical
 import java.time.Instant
 import java.time.format.DateTimeParseException
@@ -14,7 +15,9 @@ class ManifestPolicy(
         selectedProfile: GameProfile,
     ) {
         val bundleProfile = selectedProfile.bundleProfile
-        if (manifest.schemaVersion != SCHEMA_VERSION || envelope.schemaVersion != SCHEMA_VERSION) invalid()
+        if (manifest.schemaVersion !in SUPPORTED_SCHEMA_VERSIONS ||
+            envelope.schemaVersion != manifest.schemaVersion
+        ) invalid()
         if (envelope.algorithm != SUPPORTED_ALGORITHM) invalid()
         if (manifest.keyId != envelope.keyId) invalid()
         if (manifest.keyId != RELEASE_KEY_ID || !SAFE_VERSION.matches(manifest.version)) invalid()
@@ -61,12 +64,32 @@ class ManifestPolicy(
             ) {
                 fail(BundleFailureCode.UNSAFE_ENTRY)
             }
+            val expectedDestination = selectedProfile.contentPolicy
+                .destinationDirectoryFor(file.name)
+            when (manifest.schemaVersion) {
+                LEGACY_SCHEMA_VERSION -> {
+                    if (file.destinationDirectory != null ||
+                        file.name in ProfileContentPolicy.FGO_SERVANT_FILE_NAMES
+                    ) fail(BundleFailureCode.UNSAFE_ENTRY)
+                }
+                SCHEMA_VERSION -> if (file.destinationDirectory != expectedDestination) {
+                    fail(BundleFailureCode.UNSAFE_ENTRY)
+                }
+                else -> invalid()
+            }
             if (!names.add(file.name) || !archiveEntries.add(file.archiveEntry)) {
                 fail(BundleFailureCode.DUPLICATE_ENTRY)
             }
         }
 
         if (!selectedProfile.contentPolicy.isValidFileNameSet(names)) {
+            fail(BundleFailureCode.FILE_COUNT_MISMATCH)
+        }
+        if (manifest.schemaVersion == SCHEMA_VERSION &&
+            selectedProfile.contentPolicy ==
+            ProfileContentPolicy.FGO_TRANSLATION &&
+            !selectedProfile.contentPolicy.hasCompleteServantData(names)
+        ) {
             fail(BundleFailureCode.FILE_COUNT_MISMATCH)
         }
         if (manifest.uncompressedSize != totalSize) {
@@ -85,7 +108,9 @@ class ManifestPolicy(
 
     companion object {
         const val SUPPORTED_ALGORITHM = "SHA256withECDSA"
-        const val SCHEMA_VERSION = 2L
+        const val LEGACY_SCHEMA_VERSION = 2L
+        const val SCHEMA_VERSION = 3L
+        val SUPPORTED_SCHEMA_VERSIONS = setOf(LEGACY_SCHEMA_VERSION, SCHEMA_VERSION)
         val RELEASE_KEY_ID = decodeTechnical("dHJhbnNsYXRlZmdvLW1haW4=")
         private val SAFE_VERSION = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
         private val SHA_256 = Regex("[0-9a-f]{64}")

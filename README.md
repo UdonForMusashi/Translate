@@ -4,6 +4,11 @@ Fate Café é um aplicativo Android para baixar e aplicar traduções de jogos.
 O aplicativo consulta as Releases publicadas no GitHub e baixa o ZIP mais
 recente da tradução escolhida.
 
+O Fate Café abre somente o ZIP externo para autenticar o manifesto e preparar
+os arquivos declarados. Os arquivos do jogo são tratados como dados binários
+opacos: o aplicativo não extrai, abre ou descompila o conteúdo interno dos
+`.bin`, BFAA ou `ExcelDB.db`.
+
 Atualmente, o aplicativo oferece suporte a **Fate/Grand Order** nos servidores
 da América do Norte (NA) e do Japão (JP), além de **Blue Archive** no servidor
 Global.
@@ -46,6 +51,10 @@ cobertura atual do projeto é:
 
 Todo o conteúdo em português incluído nos pacotes de Fate/Grand Order foi
 traduzido pela comunidade **Fate Café**.
+
+Além dos roteiros, os pacotes atuais incluem dados textuais dos Servos, como
+nomes, perfis, habilidades, Noble Phantasms e falas de My Room disponíveis em
+cada servidor. Os arquivos de áudio não são modificados.
 
 Para cada região, o aplicativo permite escolher se a tradução será instalada
 no Fate/Grand Order oficial ou na pasta independente do cliente BetterFGO. Os

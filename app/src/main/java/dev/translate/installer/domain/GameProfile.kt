@@ -78,22 +78,49 @@ enum class ProfileContentPolicy {
     BLUE_ARCHIVE_DATABASE;
 
     fun isAllowedFileName(name: String): Boolean = when (this) {
-        FGO_TRANSLATION -> name == FGO_SPECIAL_FILE || FGO_BIN_NAME.matches(name)
+        FGO_TRANSLATION ->
+            name == FGO_SPECIAL_FILE || name in FGO_SERVANT_FILE_NAMES || FGO_BIN_NAME.matches(name)
         BLUE_ARCHIVE_DATABASE -> name == BLUE_ARCHIVE_DATABASE_NAME
     }
 
     fun isValidFileNameSet(names: Set<String>): Boolean = when (this) {
-        FGO_TRANSLATION -> FGO_SPECIAL_FILE in names && names.any { FGO_BIN_NAME.matches(it) }
+        FGO_TRANSLATION -> {
+            val servantNames = names.intersect(FGO_SERVANT_FILE_NAMES)
+            FGO_SPECIAL_FILE in names && names.any { FGO_BIN_NAME.matches(it) } &&
+                (servantNames.isEmpty() || servantNames == FGO_SERVANT_FILE_NAMES)
+        }
         BLUE_ARCHIVE_DATABASE -> names == setOf(BLUE_ARCHIVE_DATABASE_NAME)
     }
 
     fun mayCreateMissingFile(name: String): Boolean =
         this == FGO_TRANSLATION && FGO_BIN_NAME.matches(name)
 
+    fun destinationDirectoryFor(name: String): String = when (this) {
+        FGO_TRANSLATION -> if (name in FGO_SERVANT_FILE_NAMES) {
+            FGO_SERVANT_DESTINATION_DIRECTORY
+        } else {
+            FGO_STORY_DESTINATION_DIRECTORY
+        }
+        BLUE_ARCHIVE_DATABASE -> BLUE_ARCHIVE_DESTINATION_DIRECTORY
+    }
+
+    fun hasCompleteServantData(names: Set<String>): Boolean =
+        this == FGO_TRANSLATION && names.intersect(FGO_SERVANT_FILE_NAMES) == FGO_SERVANT_FILE_NAMES
+
     companion object {
         const val FGO_SPECIAL_FILE = "cfb1d36393fd67385e046b084b7cf7ed"
+        const val FGO_SERVANT_CACHE_FILE = "77e36b481d2d287a785300f98879bfa9"
+        const val FGO_SERVANT_LIST_FILE = "cfd0ddbb7e54f43c9ad8611729b968cf"
+        const val FGO_SERVANT_VERSION_FILE = "066465e9854b2aabdb997dd36ba45c59"
+        const val FGO_STORY_DESTINATION_DIRECTORY = "files/data/d713/"
+        const val FGO_SERVANT_DESTINATION_DIRECTORY = "files/data/bfaa/"
+        const val BLUE_ARCHIVE_DESTINATION_DIRECTORY =
+            "files/PUB/Resource/Preload/TableBundles/"
         const val BLUE_ARCHIVE_DATABASE_NAME = "ExcelDB.db"
         val FGO_BIN_NAME = Regex("[A-Za-z0-9_-]{1,128}\\.bin")
+        val FGO_SERVANT_FILE_NAMES = setOf(
+            FGO_SERVANT_CACHE_FILE,
+        )
     }
 }
 

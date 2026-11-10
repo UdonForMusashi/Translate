@@ -5,7 +5,7 @@ import dev.translate.installer.privileged.IInstallProgressCallback;
 
 interface IPrivilegedInstallerService {
     void destroy() = 16777114;
-    int probe(int profileCode, long requiredBytes) = 1;
+    int probe(int profileCode, long requiredBytes, in String[] requiredFileNames) = 1;
     int installFile(int profileCode, String fileName,
                     in ParcelFileDescriptor source, long size, String sha256,
                     IInstallProgressCallback callback) = 2;

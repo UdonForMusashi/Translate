@@ -41,9 +41,14 @@ internal class DirectFileInstaller(context: Context) : FileInstaller {
     override suspend fun probe(
         profile: GameProfile,
         requiredBytes: Long,
+        requiredFileNames: List<String>,
     ): InstallerCapabilities = withContext(Dispatchers.IO) {
         try {
-            engine.probe(profile.toPrivilegedProfile(), requiredBytes)
+            engine.probe(
+                profile.toPrivilegedProfile(),
+                requiredBytes,
+                requiredFileNames,
+            )
             InstallerCapabilities(true, "AVAILABLE")
         } catch (exception: InstallEngineException) {
             InstallerCapabilities(false, reasonFor(exception.error))
@@ -67,7 +72,11 @@ internal class DirectFileInstaller(context: Context) : FileInstaller {
                     it.sha256,
                 )
             }
-            engine.probe(privilegedProfile, bundle.manifest.uncompressedSize)
+            engine.probe(
+                privilegedProfile,
+                bundle.manifest.uncompressedSize,
+                records.map { it.name },
+            )
             bundle.manifest.files.forEach { declared ->
                 currentCoroutineContext().ensureActive()
                 val root = bundle.extractedDirectory.canonicalFile

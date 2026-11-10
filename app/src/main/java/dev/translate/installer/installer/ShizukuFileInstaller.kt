@@ -31,8 +31,13 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
     override suspend fun probe(
         profile: GameProfile,
         requiredBytes: Long,
+        requiredFileNames: List<String>,
     ): InstallerCapabilities = withService { service ->
-        val code = service.probe(profile.toPrivilegedCode(), requiredBytes)
+        val code = service.probe(
+            profile.toPrivilegedCode(),
+            requiredBytes,
+            requiredFileNames.toTypedArray(),
+        )
         InstallerCapabilities(code == 0, reasonFor(code))
     }
 
@@ -48,6 +53,7 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
         requireSuccess(service.probe(
             profile.toPrivilegedCode(),
             bundle.manifest.uncompressedSize,
+            names.toTypedArray(),
         ))
         files.forEach { declared ->
             currentCoroutineContext().ensureActive()
@@ -228,8 +234,8 @@ class ShizukuFileInstaller(context: Context) : FileInstaller {
     )
 
     private companion object {
-        const val USER_SERVICE_TAG = "fate-cafe-v8"
-        const val USER_SERVICE_VERSION = 8
+        const val USER_SERVICE_TAG = "fate-cafe-v10"
+        const val USER_SERVICE_VERSION = 10
         const val BIND_TIMEOUT_MS = 15_000L
         const val MAX_FILES = 4_094
         const val MAX_HASHES_PER_NAME = 2
