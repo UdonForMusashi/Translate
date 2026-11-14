@@ -4,6 +4,8 @@ Fate Café é um aplicativo Android para baixar e aplicar traduções de jogos.
 O aplicativo consulta as Releases publicadas no GitHub e baixa o ZIP mais
 recente da tradução escolhida.
 
+Confira a [nova interface e as capturas do aplicativo](docs/interface.md).
+
 O Fate Café abre somente o ZIP externo para autenticar o manifesto e preparar
 os arquivos declarados. Os arquivos do jogo são tratados como dados binários
 opacos: o aplicativo não extrai, abre ou descompila o conteúdo interno dos
