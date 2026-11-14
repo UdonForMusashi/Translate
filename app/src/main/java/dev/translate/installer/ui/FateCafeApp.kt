@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -238,7 +239,10 @@ internal fun GameBanner(game: TranslationGame) {
             null,
             Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
-            alignment = Alignment.TopCenter,
+            // Keep Arona's face in the short banner; the catalog uses the centered full scene.
+            alignment =
+                if (game == TranslationGame.BLUE_ARCHIVE) BiasAlignment(0f, -.33f)
+                else Alignment.TopCenter,
         )
         Box(
             Modifier.fillMaxSize()
