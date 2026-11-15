@@ -131,7 +131,7 @@ class InstallerFlowTest {
     fun rememberedDestinationCanStillBeChanged() {
         launch(approved().copy(rememberedFgo = GameProfile.BETTER_NA))
         openFgo()
-        compose.onNodeWithText("Alterar versão do jogo").performClick()
+        compose.onNodeWithText("Alterar versão do jogo").performScrollTo().performClick()
         compose.onNodeWithText("Qual versão você joga?").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("América do Norte").assertIsSelected()
         compose.onNodeWithText("BetterFGO", substring = false).assertIsSelected()

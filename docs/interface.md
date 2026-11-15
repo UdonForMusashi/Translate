@@ -12,8 +12,9 @@ com notificação e retomada. Veja [os detalhes dessas melhorias](downloads-and-
 ## Capturas
 
 Capturas da interface Compose executada no emulador Android 16 (API 36),
-1080 × 2400, densidade 420. Os testes fornecem estados controlados de
-autorização, pacote, progresso e recibo; não baixam traduções nem instalam
+1080 × 2400, densidade 420. O catálogo inicial foi capturado no aplicativo
+normal, após consultar as Releases reais. As demais telas usam testes com
+estados controlados de autorização, pacote, progresso e recibo; não instalam
 arquivos de jogos. As telas de conclusão demonstram a interface desse estado,
 e não uma instalação real concluída no emulador.
 
