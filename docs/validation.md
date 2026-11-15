@@ -1,5 +1,34 @@
 # Validação da interface
 
+## Versão 0.8.0 — 15 de novembro de 2026
+
+Ambiente: Windows, JDK 17, Gradle 9.4.1, Android SDK 36. A verificação estrita
+de dependências continua ativa; nenhuma nova dependência foi necessária.
+
+`assembleDebug assembleDebugAndroidTest lintDebug`: **passaram**. O lint
+reportou zero erros e 14 avisos: seis de SDK/dependências e espaço livre já
+existentes, e oito sugestões de usar a extensão KTX para SharedPreferences.
+APK debug 0.8.0 (código 13), mínimo API 24 e alvo API 36. O código foi
+incrementado a partir da 0.7.3 já presente em `main`.
+
+`testDebugUnitTest`: **95 testes, 92 aprovados, 2 falhas e 1 ignorado**.
+As falhas continuam sendo os dois casos de POSIX/symlink descritos abaixo;
+o teste de compatibilidade de produção exige ZIPs externos. Os 13 novos
+testes de transporte, retomada, cancelamento, velocidade e identidade da
+versão passaram. A retomada lê o checkpoint novamente em uma nova instância.
+
+A proteção de assinatura/manifesto e o motor transacional continuam exigidos
+antes da instalação. O serviço de download escreve somente no armazenamento
+privado do aplicativo. As regras de retomada e comparação de versões estão
+em [Catálogo, preferências e download](downloads-and-catalog.md).
+
+Não houve instalação real em jogos, teste físico, encerramento forçado do
+processo durante a transferência nem teste prolongado sob restrições de
+bateria de fabricantes. A retomada HTTP foi exercitada com respostas
+controladas; iniciar e cancelar o serviço é verificado separadamente no Android.
+
+## Referência anterior — versão 0.7.2
+
 Data: 14 de novembro de 2026.
 Ambiente: Windows, JDK 17, Gradle 9.4.1, Android SDK 36.
 

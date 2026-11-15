@@ -10,14 +10,20 @@ import dev.translate.installer.data.importer.ImportedBundle
 import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.security.ImportLimits
 import dev.translate.installer.security.ensureSufficientStorage
+import java.io.File
 
 data class RemoteImportedBundle(
     private val staged: ImportedBundle,
     val releaseAsset: ReleaseAsset,
 ) {
-    val verifiedBundle get() = staged.verifiedBundle
-    val archiveSha256 get() = staged.archiveSha256
-    val sourceDisplayName get() = staged.sourceDisplayName
+    val verifiedBundle
+        get() = staged.verifiedBundle
+
+    val archiveSha256
+        get() = staged.archiveSha256
+
+    val sourceDisplayName
+        get() = staged.sourceDisplayName
 
     fun isCurrent(latest: ReleaseAsset): Boolean =
         releaseAsset == latest &&
@@ -29,6 +35,9 @@ class RemoteBundleImporter(
     private val client: GitHubReleaseClient,
     private val stager: BundleStager,
     private val limits: ImportLimits = ImportLimits(),
+    private val transport:
+        (suspend (GameProfile, ReleaseAsset, File, DownloadProgressSink) -> BundleSourceResult)? =
+        null,
 ) {
     suspend fun import(
         transactionId: String,
@@ -65,24 +74,21 @@ class RemoteBundleImporter(
         asset: ReleaseAsset,
         events: TransactionEventEmitter,
     ): RemoteImportedBundle {
-        val staged = stager.stage(transactionId, selectedProfile, events) { partial ->
-            ensureSufficientStorage(
-                directory = partial.parentFile ?: partial,
-                requiredBytes = asset.size,
-                limits = limits,
-            )
-            events.emit(
-                phase = OperationPhase.DOWNLOAD,
-                status = OperationStatus.STARTED,
-                messageCode = MessageCode.DOWNLOAD_STARTED,
-                fileRelativePath = asset.name,
-                bytesTotal = asset.size,
-            )
-            val result = client.download(
-                profile = selectedProfile,
-                asset = asset,
-                destination = partial,
-                progress = DownloadProgressSink { processed, total ->
+        val staged =
+            stager.stage(transactionId, selectedProfile, events) { partial ->
+                ensureSufficientStorage(
+                    directory = partial.parentFile ?: partial,
+                    requiredBytes = asset.size,
+                    limits = limits,
+                )
+                events.emit(
+                    phase = OperationPhase.DOWNLOAD,
+                    status = OperationStatus.STARTED,
+                    messageCode = MessageCode.DOWNLOAD_STARTED,
+                    fileRelativePath = asset.name,
+                    bytesTotal = asset.size,
+                )
+                val progress = DownloadProgressSink { processed, total ->
                     events.emit(
                         phase = OperationPhase.DOWNLOAD,
                         status = OperationStatus.PROGRESS,
@@ -91,18 +97,27 @@ class RemoteBundleImporter(
                         bytesProcessed = processed,
                         bytesTotal = total,
                     )
-                },
-            )
-            events.emit(
-                phase = OperationPhase.DOWNLOAD,
-                status = OperationStatus.SUCCEEDED,
-                messageCode = MessageCode.DOWNLOAD_SUCCEEDED,
-                fileRelativePath = asset.name,
-                bytesProcessed = result.bytes,
-                bytesTotal = asset.size,
-            )
-            BundleSourceResult(result.sha256, asset.name)
-        }
+                }
+                val transported = transport?.invoke(selectedProfile, asset, partial, progress)
+                val result =
+                    if (transported != null) DownloadResult(transported.sha256, partial.length())
+                    else
+                        client.download(
+                            profile = selectedProfile,
+                            asset = asset,
+                            destination = partial,
+                            progress = progress,
+                        )
+                events.emit(
+                    phase = OperationPhase.DOWNLOAD,
+                    status = OperationStatus.SUCCEEDED,
+                    messageCode = MessageCode.DOWNLOAD_SUCCEEDED,
+                    fileRelativePath = asset.name,
+                    bytesProcessed = result.bytes,
+                    bytesTotal = asset.size,
+                )
+                BundleSourceResult(result.sha256, asset.name)
+            }
         return RemoteImportedBundle(staged, asset)
     }
 }

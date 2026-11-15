@@ -8,6 +8,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.translate.installer.audit.OperationPhase
 import dev.translate.installer.data.importer.ImportedBundle
+import dev.translate.installer.data.remote.DownloadSnapshot
+import dev.translate.installer.data.remote.DownloadStatus
 import dev.translate.installer.data.remote.ReleaseAsset
 import dev.translate.installer.data.remote.RemoteImportedBundle
 import dev.translate.installer.domain.GameProfile
@@ -16,6 +18,7 @@ import dev.translate.installer.security.*
 import dev.translate.installer.ui.theme.FateCafeTheme
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,6 +63,13 @@ class InstallerFlowTest {
                     onGameClosedChanged = { ui = ui.copy(gameClosedConfirmed = it) },
                     onInstall = { installs++ },
                     onUninstall = { removals++ },
+                    onOpenGame = { game ->
+                        val remembered =
+                            if (game.bundleProfile == GameProfile.BA) ui.rememberedBlueArchive
+                            else ui.rememberedFgo
+                        if (ui.installationAccessApproved && remembered != null)
+                            ui = ui.copy(selectedProfile = remembered)
+                    },
                 )
             }
         }
@@ -83,6 +93,68 @@ class InstallerFlowTest {
             accessMode = InstallationAccessMode.LEGACY_DIRECT,
             legacyStoragePermissionGranted = true,
         )
+
+    @Test
+    fun catalogShowsInstalledAndAvailableVersionsAndUpdateAction() {
+        val latest = ReleaseAsset(22, "bundle.zip", 100_000_000, "2026.11")
+        launch(
+            approved()
+                .copy(
+                    rememberedFgo = GameProfile.BETTER_NA,
+                    catalog =
+                        mapOf(
+                            GameProfile.JP to ProfileSummary(latest = latest),
+                            GameProfile.BETTER_NA to
+                                ProfileSummary(
+                                    installedVersion = "2026.10",
+                                    receiptStatus = ReceiptStatus.INSTALLED,
+                                    latest = latest,
+                                    installedAssetId = 21,
+                                ),
+                        ),
+                )
+        )
+        compose.onNodeWithText("Atualizar tradução").assertIsDisplayed()
+        compose
+            .onNodeWithText("NA · BetterFGO: Instalada 2026.10 · atualizar para 2026.11")
+            .performScrollTo()
+            .assertIsDisplayed()
+        screenshot("10-catalogo-status")
+        openFgo()
+        compose.onNodeWithText("Baixar tradução").assertIsEnabled()
+        compose.onNodeWithText("Qual versão você joga?").assertDoesNotExist()
+        compose.onNodeWithText("BetterFGO", substring = false).assertIsDisplayed()
+        compose.onNodeWithText("100,0 MB").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun rememberedDestinationCanStillBeChanged() {
+        launch(approved().copy(rememberedFgo = GameProfile.BETTER_NA))
+        openFgo()
+        compose.onNodeWithText("Alterar versão do jogo").performClick()
+        compose.onNodeWithText("Qual versão você joga?").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("América do Norte").assertIsSelected()
+        compose.onNodeWithText("BetterFGO", substring = false).assertIsSelected()
+    }
+
+    @Test
+    fun errorDiagnosticCopiesUsefulSummaryWithoutPrivatePaths() {
+        launch(approved())
+        chooseVersion()
+        compose.runOnIdle { ui = ui.copy(failureCode = BundleFailureCode.NETWORK_UNAVAILABLE) }
+        compose.onNodeWithText("Detalhes técnicos").performScrollTo().performClick()
+        compose.onNodeWithText("Copiar diagnóstico").performScrollTo().performClick()
+        compose.runOnIdle {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val clipboard =
+                context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                    as android.content.ClipboardManager
+            val text = clipboard.primaryClip?.getItemAt(0)?.text.toString()
+            assertTrue(text.contains("NETWORK_UNAVAILABLE"))
+            assertTrue(text.contains("fgo-na"))
+            assertTrue(!text.contains(context.filesDir.absolutePath))
+        }
+    }
 
     @Test
     fun catalogAndAccessHaveOneClearAction() {
@@ -155,11 +227,26 @@ class InstallerFlowTest {
         launch(approved())
         chooseVersion()
         compose.runOnIdle {
-            ui = ui.copy(isWorking = true, currentPhase = OperationPhase.DOWNLOAD, progress = .42f)
+            ui =
+                ui.copy(
+                    isWorking = true,
+                    currentPhase = OperationPhase.DOWNLOAD,
+                    progress = .42f,
+                    backgroundDownload =
+                        DownloadSnapshot(
+                            profile = GameProfile.NA,
+                            asset = ReleaseAsset(10, "bundle.zip", 100_000_000, "2026.11"),
+                            status = DownloadStatus.DOWNLOADING,
+                            bytes = 42_000_000,
+                            bytesPerSecond = 2_000_000.0,
+                            remainingSeconds = 29,
+                        ),
+                )
         }
         compose.onNodeWithContentDescription("Voltar").assertIsNotEnabled()
         compose.onNodeWithText("Cancelar operação").assertIsDisplayed()
         compose.onNodeWithText("Baixando a tradução").assertIsDisplayed()
+        compose.onNodeWithText("42,0 MB / 100,0 MB").performScrollTo().assertIsDisplayed()
         screenshot("06-download")
         compose.runOnIdle { ui = ui.copy(currentPhase = OperationPhase.COMMIT) }
         compose.onNodeWithText("Cancelar operação").assertDoesNotExist()
