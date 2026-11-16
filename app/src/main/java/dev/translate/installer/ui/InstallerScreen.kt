@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.translate.installer.audit.MessageCode
 import dev.translate.installer.audit.OperationPhase
+import dev.translate.installer.data.remote.*
 import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.installer.InstallationAccessMode
 import dev.translate.installer.installer.ReceiptStatus
@@ -46,7 +47,10 @@ internal fun InstallerScreen(
     onUninstall: () -> Unit,
 ) {
     var step by rememberSaveable {
-        mutableIntStateOf(if (state.installationAccessApproved) 1 else 0)
+        mutableIntStateOf(
+            if (!state.installationAccessApproved) 0
+            else if (state.selectedProfile != null) 2 else 1
+        )
     }
     var confirmRemoval by rememberSaveable { mutableStateOf(false) }
     val selected = state.selectedProfile?.takeIf { it.bundleProfile in game.profiles }
@@ -61,7 +65,17 @@ internal fun InstallerScreen(
     val scroll = rememberScrollState()
 
     // A revoked permission must never leave controls for later steps on screen.
-    LaunchedEffect(approved) { step = if (approved) maxOf(1, step) else 0 }
+    LaunchedEffect(approved) {
+        step =
+            if (!approved) 0
+            else if (
+                state.selectedProfile != null &&
+                    state.selectedProfile in
+                        listOfNotNull(state.rememberedFgo, state.rememberedBlueArchive)
+            )
+                2
+            else maxOf(1, step)
+    }
     LaunchedEffect(step) { scroll.scrollTo(0) }
     LaunchedEffect(selected, state.isWorking) {
         if (step == 2 && selected == null && !state.isWorking) step = if (approved) 1 else 0
@@ -155,6 +169,13 @@ internal fun InstallerScreen(
                             else ->
                                 PrimaryAction(
                                     if (state.failureCode != null) "Tentar baixar novamente"
+                                    else if (
+                                        state.backgroundDownload.profile?.bundleProfile ==
+                                            selected?.bundleProfile &&
+                                            state.backgroundDownload.status !in
+                                                setOf(DownloadStatus.IDLE, DownloadStatus.CANCELLED)
+                                    )
+                                        "Continuar download"
                                     else "Baixar tradução",
                                     enabled = approved && selected != null,
                                     onClick = onDownloadLatest,
@@ -300,6 +321,7 @@ private fun AccessStep(state: ImportUiState) {
             error = !busy,
             info = busy,
         )
+        if (!busy) DiagnosticCopyButton(state)
     }
     if (!legacy)
         ExpandableSection("Precisa de ajuda com o Shizuku?") {
@@ -462,7 +484,9 @@ private fun InstallStep(
                 if (state.events.lastOrNull()?.messageCode == MessageCode.UNINSTALL_PROGRESS)
                     "Desinstalando tradução"
                 else operationTitle(state.currentPhase),
-                "Mantenha o jogo fechado e o Fate Café aberto.",
+                if (state.currentPhase == OperationPhase.DOWNLOAD)
+                    "O download continua em segundo plano. Acompanhe pela notificação."
+                else "Mantenha o jogo fechado e o Fate Café aberto.",
             )
         installed && state.importedBundle == null ->
             SectionHeading("Tudo pronto para jogar", "A tradução está instalada em ${game.title}.")
@@ -493,6 +517,12 @@ private fun InstallStep(
                 if (state.selectedProfile?.isBetterFgo == true) "BetterFGO" else game.title,
             )
             SummaryRow("Idioma", "Português do Brasil")
+            state.selectedProfile?.let { profile ->
+                state.catalog[profile]?.latest?.let {
+                    SummaryRow("Versão disponível", it.tagName)
+                    SummaryRow("Tamanho do download", transferBytes(it.size))
+                }
+            }
             state.importedBundle?.let { SummaryRow("Pacote", it.verifiedBundle.manifest.version) }
             if (installed) SummaryRow("Versão instalada", state.installationReceipt.bundleVersion)
             if (!state.isWorking && !installed) {
@@ -525,6 +555,12 @@ private fun InstallStep(
                 style = MaterialTheme.typography.bodyMedium,
                 color = CafeMuted,
             )
+            if (
+                state.currentPhase == OperationPhase.DOWNLOAD &&
+                    state.backgroundDownload.asset != null
+            ) {
+                DownloadDetails(state.backgroundDownload)
+            }
         }
     }
     state.failureCode?.let {
@@ -591,6 +627,11 @@ private fun InstallStep(
                 )
             }
             else -> {
+                Text(
+                    "O download pode continuar com a tela apagada. A instalação será confirmada aqui, com o jogo fechado.",
+                    color = CafeMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     CafeGlyph(CafeIcon.DOWNLOAD)
                     Text(
@@ -619,7 +660,12 @@ private fun InstallStep(
                 Text("Desinstalar tradução", color = MaterialTheme.colorScheme.error)
             }
         }
-    if (state.events.isNotEmpty() || state.importedBundle != null || installerError != null)
+    if (
+        state.events.isNotEmpty() ||
+            state.importedBundle != null ||
+            installerError != null ||
+            state.failureCode != null
+    )
         TechnicalDetails(state)
 }
 
@@ -660,6 +706,7 @@ internal fun ExpandableSection(title: String, content: @Composable ColumnScope.(
 @Composable
 private fun TechnicalDetails(state: ImportUiState) {
     ExpandableSection("Detalhes técnicos") {
+        DiagnosticCopyButton(state)
         state.selectedProfile?.let {
             Text(it.packageName, style = MaterialTheme.typography.bodySmall, color = CafeMuted)
         }
@@ -694,6 +741,32 @@ private fun TechnicalDetails(state: ImportUiState) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DownloadDetails(download: DownloadSnapshot) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "${transferBytes(download.bytes)} / ${transferBytes(download.asset?.size ?: 0)}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = LatteGold,
+        )
+        Text(
+            when (download.status) {
+                DownloadStatus.RETRYING -> "Conexão interrompida. Tentando novamente…"
+                DownloadStatus.PAUSED -> "Download salvo para retomar."
+                else ->
+                    listOfNotNull(
+                            download.bytesPerSecond?.let { "${transferBytes(it.toLong())}/s" },
+                            download.remainingSeconds?.let { "Restante: ${transferEta(it)}" },
+                        )
+                        .joinToString(" · ")
+                        .ifBlank { "Calculando velocidade…" }
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = CafeMuted,
+        )
     }
 }
 

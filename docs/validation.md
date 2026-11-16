@@ -1,5 +1,57 @@
 # Validação da interface
 
+## Versão 0.8.0 — 15 de novembro de 2026
+
+Ambiente: Windows, JDK 17, Gradle 9.4.1, Android SDK 36. A verificação estrita
+de dependências continua ativa; nenhuma nova dependência foi necessária.
+
+`assembleDebug assembleDebugAndroidTest lintDebug`: **passaram**. O lint
+reportou zero erros e 14 avisos: seis de SDK/dependências e espaço livre já
+existentes, e oito sugestões de usar a extensão KTX para SharedPreferences.
+APK debug 0.8.0 (código 13), mínimo API 24 e alvo API 36. O código foi
+incrementado a partir da 0.7.3 já presente em `main`.
+Assinatura APK v2 verificada. SHA-256:
+`16153ce99a8fd9a0bcc0fbc60d852bc48d699f90444f91d4e01f1a095a993dc4`.
+
+`testDebugUnitTest`: **95 testes, 92 aprovados, 2 falhas e 1 ignorado**.
+As falhas continuam sendo os dois casos de POSIX/symlink descritos abaixo;
+o teste de compatibilidade de produção exige ZIPs externos. Os 13 novos
+testes de transporte, retomada, cancelamento, velocidade e identidade da
+versão passaram. A retomada lê o checkpoint novamente em uma nova instância.
+
+No emulador Android 16 / API 36, 1080 × 2400, densidade 420 e fonte padrão:
+**14/14 testes Android passaram**. São 12 cenários de interface com estados
+controlados, um teste de preferências persistidas e um teste que inicia o
+serviço real, coloca a Activity fora da tela e cancela a transferência.
+Callbacks de uma geração cancelada são rejeitados. As capturas foram
+inspecionadas visualmente.
+
+Também passaram **4/4 cenários** em 840 × 1680 (320 × 640 dp), fonte a 130%:
+status/atualização no catálogo, alteração do destino lembrado, diagnóstico
+copiável e métricas de download/cancelamento. Os testes rolam até os controles
+fora da área visível antes de interagir; o rodapé continua acessível.
+
+O APK normal também foi aberto e consultou as Releases reais: JP `v20261111`,
+NA `v20261110` e Blue Archive Global `v20261026`. A captura inicial do catálogo
+vem dessa execução; as telas de atualização/instalação usam estados controlados.
+
+Uma primeira rodada sofreu interferência de um ANR do System UI do emulador
+durante concorrência com o build. Após liberar a janela e encerrar o Gradle,
+a rodada completa passou, incluindo acesso ao clipboard. As capturas dessa
+primeira rodada foram substituídas.
+
+A proteção de assinatura/manifesto e o motor transacional continuam exigidos
+antes da instalação. O serviço de download escreve somente no armazenamento
+privado do aplicativo. As regras de retomada e comparação de versões estão
+em [Catálogo, preferências e download](downloads-and-catalog.md).
+
+Não houve instalação real em jogos, teste físico, encerramento forçado do
+processo durante a transferência nem teste prolongado sob restrições de
+bateria de fabricantes. A retomada HTTP foi exercitada com respostas
+controladas; iniciar e cancelar o serviço é verificado separadamente no Android.
+
+## Referência anterior — versão 0.7.2
+
 Data: 14 de novembro de 2026.
 Ambiente: Windows, JDK 17, Gradle 9.4.1, Android SDK 36.
 

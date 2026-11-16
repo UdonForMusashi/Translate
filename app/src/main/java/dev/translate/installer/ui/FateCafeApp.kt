@@ -23,7 +23,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.translate.installer.R
+import dev.translate.installer.data.remote.DownloadStatus
 import dev.translate.installer.domain.GameProfile
+import dev.translate.installer.installer.ReceiptStatus
 import dev.translate.installer.ui.theme.*
 
 internal enum class TranslationGame(
@@ -59,17 +61,32 @@ fun FateCafeApp(
     onGameClosedChanged: (Boolean) -> Unit,
     onInstall: () -> Unit,
     onUninstall: () -> Unit,
+    onOpenGame: (GameProfile) -> Unit = {},
+    onRefreshCatalog: () -> Unit = {},
+    requestedProfile: GameProfile? = null,
+    notificationOpenRequest: Int = 0,
 ) {
     var destination by rememberSaveable { mutableStateOf<TranslationGame?>(null) }
     var showHelp by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(requestedProfile, notificationOpenRequest) {
+        if (requestedProfile != null && !state.isWorking) {
+            onOpenGame(requestedProfile)
+            destination =
+                if (requestedProfile.bundleProfile == GameProfile.BA) TranslationGame.BLUE_ARCHIVE
+                else TranslationGame.FGO
+        }
+    }
     val game = destination
     if (game == null) {
         GameCatalogScreen(
             onGameSelected = {
                 onClearProfileSelection()
+                onOpenGame(it.profiles.first())
                 destination = it
             },
             onHelp = { showHelp = true },
+            state = state,
+            onRefresh = onRefreshCatalog,
         )
     } else {
         key(game) {
@@ -98,7 +115,12 @@ fun FateCafeApp(
 }
 
 @Composable
-private fun GameCatalogScreen(onGameSelected: (TranslationGame) -> Unit, onHelp: () -> Unit) {
+private fun GameCatalogScreen(
+    onGameSelected: (TranslationGame) -> Unit,
+    onHelp: () -> Unit,
+    state: ImportUiState,
+    onRefresh: () -> Unit,
+) {
     val uri = LocalUriHandler.current
     Scaffold(containerColor = Espresso) { insets ->
         Box(Modifier.fillMaxSize().padding(insets), contentAlignment = Alignment.TopCenter) {
@@ -113,6 +135,26 @@ private fun GameCatalogScreen(onGameSelected: (TranslationGame) -> Unit, onHelp:
                     IconButton(onHelp, Modifier.semantics { contentDescription = "Ajuda" }) {
                         CafeGlyph(CafeIcon.HELP, color = CafeMuted)
                     }
+                    IconButton(
+                        onRefresh,
+                        Modifier.semantics { contentDescription = "Atualizar versões" },
+                        enabled = state.catalog.values.none { it.checking },
+                    ) {
+                        Text("↻", color = CafeMuted, style = MaterialTheme.typography.headlineSmall)
+                    }
+                }
+                if (
+                    state.backgroundDownload.profile != null &&
+                        state.backgroundDownload.status !in
+                            setOf(DownloadStatus.IDLE, DownloadStatus.CANCELLED)
+                ) {
+                    Text(
+                        if (state.backgroundDownload.active)
+                            "Há um download em andamento. Abra o jogo abaixo para acompanhar."
+                        else "Há um download salvo. Abra o jogo abaixo para continuar.",
+                        color = LatteGold,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
@@ -127,7 +169,7 @@ private fun GameCatalogScreen(onGameSelected: (TranslationGame) -> Unit, onHelp:
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     TranslationGame.entries.forEach { game ->
-                        CatalogGameCard(game) { onGameSelected(game) }
+                        CatalogGameCard(game, state) { onGameSelected(game) }
                     }
                 }
                 Row(
@@ -172,7 +214,10 @@ private fun GameCatalogScreen(onGameSelected: (TranslationGame) -> Unit, onHelp:
 }
 
 @Composable
-private fun CatalogGameCard(game: TranslationGame, onClick: () -> Unit) {
+private fun CatalogGameCard(game: TranslationGame, state: ImportUiState, onClick: () -> Unit) {
+    val remembered =
+        if (game == TranslationGame.FGO) state.rememberedFgo else state.rememberedBlueArchive
+    val updateAvailable = remembered?.let { state.catalog[it]?.updateAvailable } == true
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
@@ -213,13 +258,32 @@ private fun CatalogGameCard(game: TranslationGame, onClick: () -> Unit) {
                 )
                 Text(game.title, style = MaterialTheme.typography.titleLarge)
                 Text(game.regions, style = MaterialTheme.typography.bodySmall, color = CafeMuted)
+                if (state.catalog.isNotEmpty())
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        game.profiles.forEach { base ->
+                            val destination =
+                                remembered?.takeIf { it.bundleProfile == base } ?: base
+                            val summary = state.catalog[destination]
+                            if (summary != null) {
+                                val region =
+                                    if (base == GameProfile.JP) "JP"
+                                    else if (base == GameProfile.NA) "NA" else "Global"
+                                Text(
+                                    "$region${if(destination.isBetterFgo) " · BetterFGO" else ""}: ${catalogStatus(summary)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color =
+                                        if (summary.updateAvailable) LatteGoldBright else CafeMuted,
+                                )
+                            }
+                        }
+                    }
                 Spacer(Modifier.height(4.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        "Selecionar jogo",
+                        if (updateAvailable) "Atualizar tradução" else "Selecionar jogo",
                         Modifier.weight(1f),
                         style = MaterialTheme.typography.labelMedium,
                         color = LatteGold,
@@ -230,6 +294,26 @@ private fun CatalogGameCard(game: TranslationGame, onClick: () -> Unit) {
         }
     }
 }
+
+internal fun catalogStatus(summary: ProfileSummary): String =
+    when {
+        summary.receiptInvalid || summary.receiptStatus == ReceiptStatus.PENDING ->
+            "Revisar instalação"
+        summary.updateAvailable ->
+            "Instalada ${summary.installedVersion} · atualizar para ${summary.latest?.tagName}"
+        summary.installedVersion != null ->
+            "Instalada ${summary.installedVersion}" +
+                when {
+                    summary.lookupFailure != null -> " · consulta indisponível"
+                    summary.latest != null -> " · disponível ${summary.latest.tagName}"
+                    summary.checking -> " · consultando versão…"
+                    else -> ""
+                }
+        summary.checking -> "Consultando versão…"
+        summary.lookupFailure != null -> "Consulta indisponível"
+        summary.latest != null -> "Disponível ${summary.latest.tagName}"
+        else -> "Tradução não instalada"
+    }
 
 @Composable
 internal fun GameBanner(game: TranslationGame) {

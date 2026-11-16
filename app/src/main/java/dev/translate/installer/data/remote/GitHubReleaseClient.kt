@@ -8,9 +8,6 @@ import dev.translate.installer.domain.GameProfile
 import dev.translate.installer.security.BundleFailureCode
 import dev.translate.installer.security.BundleValidationException
 import dev.translate.installer.security.ImportLimits
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayInputStream
@@ -25,18 +22,14 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
-data class ReleaseAsset(
-    val id: Long,
-    val name: String,
-    val size: Long,
-    val tagName: String,
-)
+data class ReleaseAsset(val id: Long, val name: String, val size: Long, val tagName: String)
 
-data class DownloadResult(
-    val sha256: String,
-    val bytes: Long,
-)
+data class DownloadResult(val sha256: String, val bytes: Long)
 
 fun interface DownloadProgressSink {
     fun onProgress(processed: Long, total: Long)
@@ -45,91 +38,156 @@ fun interface DownloadProgressSink {
 class GitHubReleaseClient(
     private val limits: ImportLimits = ImportLimits(),
     private val parser: ReleaseMetadataParser = ReleaseMetadataParser(),
+    private val connectionFactory: (URL) -> HttpURLConnection = {
+        it.openConnection() as HttpURLConnection
+    },
 ) {
-    suspend fun latest(profile: GameProfile): ReleaseAsset = withContext(Dispatchers.IO) {
-        val repository = RemoteRepositoryCatalog.repository(profile)
-        val endpoint = URL("https://api.github.com/repos/$OWNER/$repository/releases/latest")
-        val connection = openConnection(endpoint, JSON_ACCEPT)
-        try {
-            when (connection.responseCode) {
-                HttpURLConnection.HTTP_OK -> {
-                    val bytes = readBounded(connection, MAX_RELEASE_JSON_BYTES)
-                    parser.parse(bytes, limits.maxArchiveBytes)
+    suspend fun latest(profile: GameProfile): ReleaseAsset =
+        withContext(Dispatchers.IO) {
+            val repository = RemoteRepositoryCatalog.repository(profile)
+            val endpoint = URL("https://api.github.com/repos/$OWNER/$repository/releases/latest")
+            val connection = openConnection(endpoint, JSON_ACCEPT)
+            try {
+                when (connection.responseCode) {
+                    HttpURLConnection.HTTP_OK -> {
+                        val bytes = readBounded(connection, MAX_RELEASE_JSON_BYTES)
+                        parser.parse(bytes, limits.maxArchiveBytes)
+                    }
+                    HttpURLConnection.HTTP_NOT_FOUND -> fail(BundleFailureCode.RELEASE_NOT_FOUND)
+                    HTTP_RATE_LIMITED,
+                    HTTP_TOO_MANY_REQUESTS -> fail(BundleFailureCode.RELEASE_RATE_LIMITED)
+                    else -> fail(BundleFailureCode.RELEASE_REQUEST_FAILED)
                 }
-                HttpURLConnection.HTTP_NOT_FOUND -> fail(BundleFailureCode.RELEASE_NOT_FOUND)
-                HTTP_RATE_LIMITED, HTTP_TOO_MANY_REQUESTS ->
-                    fail(BundleFailureCode.RELEASE_RATE_LIMITED)
-                else -> fail(BundleFailureCode.RELEASE_REQUEST_FAILED)
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: BundleValidationException) {
+                throw exception
+            } catch (exception: IOException) {
+                fail(BundleFailureCode.NETWORK_UNAVAILABLE, exception)
+            } catch (exception: RuntimeException) {
+                fail(BundleFailureCode.RELEASE_RESPONSE_INVALID, exception)
+            } finally {
+                connection.disconnect()
             }
-        } catch (exception: BundleValidationException) {
-            throw exception
-        } catch (exception: IOException) {
-            fail(BundleFailureCode.NETWORK_UNAVAILABLE, exception)
-        } catch (exception: RuntimeException) {
-            fail(BundleFailureCode.RELEASE_RESPONSE_INVALID, exception)
-        } finally {
-            connection.disconnect()
         }
-    }
 
     suspend fun download(
         profile: GameProfile,
         asset: ReleaseAsset,
         destination: File,
         progress: DownloadProgressSink,
-    ): DownloadResult = withContext(Dispatchers.IO) {
-        if (asset.id <= 0 || asset.size !in 1..limits.maxArchiveBytes) {
-            fail(BundleFailureCode.RELEASE_ASSET_INVALID)
-        }
-        val repository = RemoteRepositoryCatalog.repository(profile)
-        val endpoint = URL("https://api.github.com/repos/$OWNER/$repository/releases/assets/${asset.id}")
-        val connection = try {
-            openAssetFollowingRedirects(endpoint)
-        } catch (exception: BundleValidationException) {
-            throw exception
-        } catch (exception: IOException) {
-            fail(BundleFailureCode.NETWORK_UNAVAILABLE, exception)
-        } catch (exception: RuntimeException) {
-            fail(BundleFailureCode.DOWNLOAD_FAILED, exception)
-        }
-        try {
-            val contentLength = connection.contentLengthLong
-            if (contentLength > limits.maxArchiveBytes ||
-                contentLength >= 0 && contentLength != asset.size
-            ) {
-                fail(BundleFailureCode.DOWNLOAD_SIZE_MISMATCH)
+        checkpoint: ResumeCheckpoint? = null,
+    ): DownloadResult =
+        withContext(Dispatchers.IO) {
+            if (asset.id <= 0 || asset.size !in 1..limits.maxArchiveBytes) {
+                fail(BundleFailureCode.RELEASE_ASSET_INVALID)
             }
-            downloadBody(connection, destination, asset.size, progress)
-        } catch (exception: BundleValidationException) {
-            throw exception
-        } catch (exception: IOException) {
-            fail(BundleFailureCode.NETWORK_UNAVAILABLE, exception)
-        } catch (exception: RuntimeException) {
-            fail(BundleFailureCode.DOWNLOAD_FAILED, exception)
-        } finally {
-            connection.disconnect()
+            val repository = RemoteRepositoryCatalog.repository(profile)
+            val validator = checkpoint?.prepare(asset)
+            val offset =
+                if (checkpoint != null && destination == checkpoint.partial && destination.isFile)
+                    destination.length()
+                else 0L
+            if (offset == asset.size) {
+                progress.onProgress(offset, asset.size)
+                return@withContext DownloadResult(hashFile(destination), offset)
+            }
+            val endpoint =
+                URL("https://api.github.com/repos/$OWNER/$repository/releases/assets/${asset.id}")
+            val connection =
+                try {
+                    openAssetFollowingRedirects(endpoint, offset, validator)
+                } catch (exception: CancellationException) {
+                    throw exception
+                } catch (exception: BundleValidationException) {
+                    throw exception
+                } catch (exception: IOException) {
+                    fail(BundleFailureCode.NETWORK_UNAVAILABLE, exception)
+                } catch (exception: RuntimeException) {
+                    fail(BundleFailureCode.DOWNLOAD_FAILED, exception)
+                }
+            try {
+                val resumed =
+                    offset > 0 && connection.responseCode == HttpURLConnection.HTTP_PARTIAL
+                if (connection.responseCode == 416) {
+                    checkpoint?.clear()
+                    fail(BundleFailureCode.DOWNLOAD_FAILED)
+                }
+                val returnedTag = connection.getHeaderField("ETag")
+                if (resumed && returnedTag != null && returnedTag != validator) {
+                    checkpoint?.clear()
+                    fail(BundleFailureCode.DOWNLOAD_SIZE_MISMATCH)
+                }
+                if (
+                    connection.responseCode == HttpURLConnection.HTTP_PARTIAL &&
+                        (!resumed ||
+                            !validContentRange(
+                                connection.getHeaderField("Content-Range"),
+                                offset,
+                                asset.size,
+                            ))
+                ) {
+                    checkpoint?.clear()
+                    fail(BundleFailureCode.DOWNLOAD_SIZE_MISMATCH)
+                }
+                val start = if (resumed) offset else 0L
+                val contentLength = connection.contentLengthLong
+                if (
+                    contentLength > limits.maxArchiveBytes ||
+                        contentLength >= 0 && contentLength != asset.size - start
+                ) {
+                    checkpoint?.clear()
+                    fail(BundleFailureCode.DOWNLOAD_SIZE_MISMATCH)
+                }
+                if (!resumed && destination.exists()) FileOutputStream(destination).use {}
+                checkpoint?.record(
+                    asset,
+                    connection.getHeaderField("ETag")?.takeIf(::strongETag)
+                        ?: validator.takeIf { resumed },
+                )
+                downloadBody(connection, destination, asset.size, progress, start)
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (exception: BundleValidationException) {
+                throw exception
+            } catch (exception: IOException) {
+                fail(BundleFailureCode.NETWORK_UNAVAILABLE, exception)
+            } catch (exception: RuntimeException) {
+                fail(BundleFailureCode.DOWNLOAD_FAILED, exception)
+            } finally {
+                connection.disconnect()
+            }
         }
-    }
 
-    private suspend fun openAssetFollowingRedirects(initial: URL): HttpURLConnection {
+    private suspend fun openAssetFollowingRedirects(
+        initial: URL,
+        offset: Long,
+        validator: String?,
+    ): HttpURLConnection {
         var current = initial
         repeat(MAX_REDIRECTS + 1) { redirectCount ->
             coroutineContext.ensureActive()
             val connection = openConnection(current, BINARY_ACCEPT)
-            val status = try {
-                connection.responseCode
-            } catch (exception: IOException) {
-                connection.disconnect()
-                throw exception
+            if (offset > 0 && validator != null) {
+                connection.setRequestProperty("Range", "bytes=$offset-")
+                connection.setRequestProperty("If-Range", validator)
             }
+            val status =
+                try {
+                    connection.responseCode
+                } catch (exception: IOException) {
+                    connection.disconnect()
+                    throw exception
+                }
             when (status) {
-                HttpURLConnection.HTTP_OK -> return connection
+                HttpURLConnection.HTTP_OK,
+                HttpURLConnection.HTTP_PARTIAL,
+                416 -> return connection
                 HttpURLConnection.HTTP_MOVED_PERM,
                 HttpURLConnection.HTTP_MOVED_TEMP,
                 HTTP_SEE_OTHER,
                 HTTP_TEMPORARY_REDIRECT,
-                HTTP_PERMANENT_REDIRECT,
-                -> {
+                HTTP_PERMANENT_REDIRECT -> {
                     val location = connection.getHeaderField("Location")
                     connection.disconnect()
                     if (redirectCount >= MAX_REDIRECTS || location.isNullOrBlank()) {
@@ -142,7 +200,8 @@ class GitHubReleaseClient(
                     connection.disconnect()
                     fail(BundleFailureCode.RELEASE_ASSET_INVALID)
                 }
-                HTTP_RATE_LIMITED, HTTP_TOO_MANY_REQUESTS -> {
+                HTTP_RATE_LIMITED,
+                HTTP_TOO_MANY_REQUESTS -> {
                     connection.disconnect()
                     fail(BundleFailureCode.RELEASE_RATE_LIMITED)
                 }
@@ -160,17 +219,30 @@ class GitHubReleaseClient(
         destination: File,
         expectedSize: Long,
         progress: DownloadProgressSink,
+        offset: Long,
     ): DownloadResult {
         val digest = MessageDigest.getInstance("SHA-256")
-        var processed = 0L
+        if (offset > 0)
+            destination.inputStream().buffered().use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+        var processed = offset
+        progress.onProgress(processed, expectedSize)
         var lastProgressAtNanos = 0L
         BufferedInputStream(connection.inputStream).use { input ->
-            FileOutputStream(destination).use { fileOutput ->
+            FileOutputStream(destination, offset > 0).use { fileOutput ->
                 BufferedOutputStream(fileOutput).use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     while (true) {
                         coroutineContext.ensureActive()
                         val read = input.read(buffer)
+                        coroutineContext.ensureActive()
                         if (read < 0) break
                         if (read == 0) continue
                         processed += read
@@ -180,8 +252,9 @@ class GitHubReleaseClient(
                         digest.update(buffer, 0, read)
                         output.write(buffer, 0, read)
                         val now = System.nanoTime()
-                        if (processed == expectedSize ||
-                            now - lastProgressAtNanos >= PROGRESS_INTERVAL_NANOS
+                        if (
+                            processed == expectedSize ||
+                                now - lastProgressAtNanos >= PROGRESS_INTERVAL_NANOS
                         ) {
                             lastProgressAtNanos = now
                             progress.onProgress(processed, expectedSize)
@@ -198,7 +271,7 @@ class GitHubReleaseClient(
 
     private fun openConnection(url: URL, accept: String): HttpURLConnection {
         validateRemoteUrl(url)
-        return (url.openConnection() as HttpURLConnection).apply {
+        return connectionFactory(url).apply {
             requestMethod = "GET"
             instanceFollowRedirects = false
             connectTimeout = CONNECT_TIMEOUT_MS
@@ -208,6 +281,7 @@ class GitHubReleaseClient(
             setRequestProperty("Accept", accept)
             setRequestProperty("X-GitHub-Api-Version", API_VERSION)
             setRequestProperty("User-Agent", USER_AGENT)
+            setRequestProperty("Accept-Encoding", "identity")
         }
     }
 
@@ -231,8 +305,21 @@ class GitHubReleaseClient(
         return output.toByteArray()
     }
 
-    private fun ByteArray.toHex(): String = joinToString(separator = "") { byte ->
-        "%02x".format(byte.toInt() and 0xff)
+    private fun ByteArray.toHex(): String =
+        joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+    private suspend fun hashFile(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                coroutineContext.ensureActive()
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().toHex()
     }
 
     private companion object {
@@ -258,32 +345,36 @@ class ReleaseMetadataParser {
     fun parse(bytes: ByteArray, maxArchiveBytes: Long): ReleaseAsset {
         if (bytes.isEmpty() || bytes.size > MAX_JSON_BYTES) invalid()
         return try {
-            JsonReader(
-                InputStreamReader(ByteArrayInputStream(bytes), StandardCharsets.UTF_8),
-            ).use { reader ->
-                reader.setStrictness(Strictness.STRICT)
-                var tagName: String? = null
-                var assets: List<ParsedAsset>? = null
-                reader.readObject { name ->
-                    when (name) {
-                        "tag_name" -> tagName = reader.readLimitedString(MAX_TAG_LENGTH)
-                        "assets" -> assets = reader.readAssets()
-                        else -> reader.skipValue()
+            JsonReader(InputStreamReader(ByteArrayInputStream(bytes), StandardCharsets.UTF_8))
+                .use { reader ->
+                    reader.setStrictness(Strictness.STRICT)
+                    var tagName: String? = null
+                    var assets: List<ParsedAsset>? = null
+                    reader.readObject { name ->
+                        when (name) {
+                            "tag_name" -> tagName = reader.readLimitedString(MAX_TAG_LENGTH)
+                            "assets" -> assets = reader.readAssets()
+                            else -> reader.skipValue()
+                        }
                     }
+                    if (reader.peek() != JsonToken.END_DOCUMENT) invalid()
+                    val tag = tagName ?: invalid()
+                    if (!SAFE_TAG_NAME.matches(tag)) invalid()
+                    val releaseAssets = assets ?: invalid()
+                    if (releaseAssets.size != 1) invalidAsset()
+                    val asset = releaseAssets.single()
+                    if (
+                        asset.id <= 0 ||
+                            asset.size !in 1..maxArchiveBytes ||
+                            asset.state != "uploaded" ||
+                            !SAFE_ZIP_NAME.matches(asset.name)
+                    ) {
+                        invalidAsset()
+                    }
+                    ReleaseAsset(asset.id, asset.name, asset.size, tag)
                 }
-                if (reader.peek() != JsonToken.END_DOCUMENT) invalid()
-                val tag = tagName ?: invalid()
-                if (!SAFE_TAG_NAME.matches(tag)) invalid()
-                val releaseAssets = assets ?: invalid()
-                if (releaseAssets.size != 1) invalidAsset()
-                val asset = releaseAssets.single()
-                if (asset.id <= 0 || asset.size !in 1..maxArchiveBytes ||
-                    asset.state != "uploaded" || !SAFE_ZIP_NAME.matches(asset.name)
-                ) {
-                    invalidAsset()
-                }
-                ReleaseAsset(asset.id, asset.name, asset.size, tag)
-            }
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: BundleValidationException) {
             throw exception
         } catch (exception: Exception) {
@@ -375,23 +466,29 @@ class ReleaseMetadataParser {
 }
 
 object RemoteRepositoryCatalog {
-    fun repository(profile: GameProfile): String = when (profile.bundleProfile) {
-        GameProfile.NA -> "content-na"
-        GameProfile.JP -> "content-jp"
-        GameProfile.BA -> "content-ba"
-        else -> error("Perfil de pacote sem repositório")
-    }
+    fun repository(profile: GameProfile): String =
+        when (profile.bundleProfile) {
+            GameProfile.NA -> "content-na"
+            GameProfile.JP -> "content-jp"
+            GameProfile.BA -> "content-ba"
+            else -> error("Perfil de pacote sem repositório")
+        }
 }
 
 internal fun validateRemoteUrl(url: URL) {
-    val uri = try {
-        URI(url.toString())
-    } catch (exception: Exception) {
-        fail(BundleFailureCode.DOWNLOAD_REDIRECT_INVALID, exception)
-    }
+    val uri =
+        try {
+            URI(url.toString())
+        } catch (exception: Exception) {
+            fail(BundleFailureCode.DOWNLOAD_REDIRECT_INVALID, exception)
+        }
     val host = uri.host?.lowercase() ?: fail(BundleFailureCode.DOWNLOAD_REDIRECT_INVALID)
-    if (uri.scheme != "https" || uri.userInfo != null || uri.fragment != null ||
-        uri.port !in listOf(-1, 443) || host !in ALLOWED_REMOTE_HOSTS
+    if (
+        uri.scheme != "https" ||
+            uri.userInfo != null ||
+            uri.fragment != null ||
+            uri.port !in listOf(-1, 443) ||
+            host !in ALLOWED_REMOTE_HOSTS
     ) {
         fail(BundleFailureCode.DOWNLOAD_REDIRECT_INVALID)
     }
@@ -400,7 +497,4 @@ internal fun validateRemoteUrl(url: URL) {
 private fun fail(code: BundleFailureCode, cause: Throwable? = null): Nothing =
     throw BundleValidationException(code, cause)
 
-private val ALLOWED_REMOTE_HOSTS = setOf(
-    "api.github.com",
-    "release-assets.githubusercontent.com",
-)
+private val ALLOWED_REMOTE_HOSTS = setOf("api.github.com", "release-assets.githubusercontent.com")

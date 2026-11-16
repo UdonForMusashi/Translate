@@ -5,6 +5,9 @@ O aplicativo consulta as Releases publicadas no GitHub e baixa o ZIP mais
 recente da tradução escolhida.
 
 Confira a [nova interface e as capturas do aplicativo](docs/interface.md).
+As [melhorias da versão 0.8.0](docs/downloads-and-catalog.md) incluem catálogo
+com versões, escolhas salvas por jogo, progresso detalhado, download com
+notificação e retomada, e diagnóstico copiável.
 
 O Fate Café abre somente o ZIP externo para autenticar o manifesto e preparar
 os arquivos declarados. Os arquivos do jogo são tratados como dados binários
